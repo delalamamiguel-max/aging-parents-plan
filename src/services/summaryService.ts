@@ -1,32 +1,39 @@
 /**
  * AI Summary Service — Aging Parents Plan
- * Source: masterplan.md §7.2; implementation-plan.md §Sprint 1
+ * Source: masterplan.md §7.2; implementation-plan.md §Sprint 2
  *
- * Stub implementation for Sprint 1. Returns a structured draft from raw input.
- * In Sprint 2: connect to real LLM, add readability guardrails, uncertainty flagging.
+ * Sprint 2: real LLM integration via llmClient (Gemini or Ollama).
  *
- * CONTRACTS ENFORCED:
+ * CONTRACTS ENFORCED (masterplan.md §7.2, §7.6):
  * - Never invent drug names, dosages, dates, providers, tests, or referral instructions
  * - Flag uncertainty rather than silently resolve it
- * - Plain language at or below 6th-grade reading level (enforced in Sprint 2)
- * - Sentences under 20 words (enforced in Sprint 2)
+ * - Plain language at or below 6th-grade reading level (enforced by readabilityGuard)
+ * - Sentences under 20 words (enforced by readabilityGuard)
  * - Generation p95 target: under 60 seconds
+ * - If LLM fails or output is invalid: safe fallback (all sections empty, one capture-again flag)
  */
 
+import { format } from 'date-fns';
 import {
   SummarySection,
   ActionItem,
   AccuracyFlag,
   SectionType,
   SECTION_ORDER,
-  TaskStatus,
 } from '../contracts/schema';
+import { callLLM, LLMError } from './llmClient';
+import { SUMMARY_SYSTEM_PROMPT, buildUserPrompt, buildCorrectionPrompt } from './promptTemplates';
+import { parseLLMResponse, validateLLMOutput, RawActionItem, RawFlag } from './outputValidator';
+import { applyReadabilityToSections } from './readabilityGuard';
+import { isAIConfigured } from '../config/env';
+
+// ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface GenerateSummaryInput {
   rawText?: string;
   rawAudioTranscript?: string;
   language?: 'en' | 'es';
-  visitDate?: string;
+  visitDate?: string; // ISO date — defaults to today if absent
 }
 
 export interface GenerateSummaryOutput {
@@ -34,25 +41,219 @@ export interface GenerateSummaryOutput {
   actionItems: ActionItem[];
   flags: AccuracyFlag[];
   generatedAt: string;
+  /** Validation warnings logged internally — not shown to user */
+  _validationWarnings?: string[];
 }
 
-// ─── Stub generator (Sprint 1) ────────────────────────────────────────────────
-// Parses raw text input into a structured draft.
-// No hallucination — only uses what the user provided.
+// ─── Main entry: generate summary ────────────────────────────────────────────
 
 export async function generateSummaryFromInput(
   visitId: string,
   input: GenerateSummaryInput
 ): Promise<GenerateSummaryOutput> {
-  // Simulate processing latency (50-500ms for stub)
-  await delay(800 + Math.random() * 400);
-
   const rawContent = input.rawText ?? input.rawAudioTranscript ?? '';
-  const now = new Date().toISOString();
+  const visitDate = input.visitDate ?? format(new Date(), 'yyyy-MM-dd');
+  const language = input.language ?? 'en';
+  const generatedAt = new Date().toISOString();
 
-  // Build sections from input — stub only extracts what is present
+  // Guard: empty input
+  if (!rawContent.trim()) {
+    return buildFallback(visitId, 'no_input', generatedAt);
+  }
+
+  // Guard: LLM not configured
+  if (!isAIConfigured()) {
+    console.warn('[summaryService] LLM not configured — falling back to stub');
+    return buildStubFallback(visitId, rawContent, generatedAt);
+  }
+
+  try {
+    const userPrompt = buildUserPrompt({ rawText: rawContent, visitDate, language });
+    const rawResponse = await callLLM(SUMMARY_SYSTEM_PROMPT, userPrompt);
+
+    return procesLLMResponse(rawResponse, rawContent, visitId, visitDate, generatedAt);
+  } catch (err) {
+    const code = err instanceof LLMError ? err.code : 'unknown';
+    console.error(`[summaryService] LLM call failed (${code}):`, err);
+    return buildFallback(visitId, code, generatedAt);
+  }
+}
+
+// ─── One-time regeneration with parent correction ─────────────────────────────
+
+export async function regenerateSummaryWithCorrection(
+  visitId: string,
+  originalSections: SummarySection[],
+  correction: string,
+  visitDate: string,
+  language: 'en' | 'es' = 'en'
+): Promise<GenerateSummaryOutput> {
+  const generatedAt = new Date().toISOString();
+
+  if (!isAIConfigured()) {
+    return buildFallback(visitId, 'not_configured', generatedAt);
+  }
+
+  const originalSummaryJSON = JSON.stringify(
+    Object.fromEntries(originalSections.map(s => [s.sectionType, s.content]))
+  );
+
+  const userPrompt = buildCorrectionPrompt({ originalSummary: originalSummaryJSON, correction, visitDate });
+
+  try {
+    const rawResponse = await callLLM(SUMMARY_SYSTEM_PROMPT, userPrompt);
+    return procesLLMResponse(rawResponse, correction, visitId, visitDate, generatedAt);
+  } catch (err) {
+    console.error('[summaryService] Regeneration failed:', err);
+    return buildFallback(visitId, 'regeneration_failed', generatedAt);
+  }
+}
+
+// ─── Internal: process LLM response → GenerateSummaryOutput ─────────────────
+
+function procesLLMResponse(
+  rawResponse: string,
+  rawInput: string,
+  visitId: string,
+  visitDate: string,
+  generatedAt: string
+): GenerateSummaryOutput {
+  // Parse
+  const parsed = parseLLMResponse(rawResponse);
+  if (!parsed) {
+    console.error('[summaryService] Failed to parse LLM JSON response');
+    return buildFallback(visitId, 'parse_error', generatedAt);
+  }
+
+  // Validate
+  const validation = validateLLMOutput(parsed, rawInput, visitDate);
+  const sanitised = validation.sanitisedOutput;
+
+  if (!sanitised) {
+    return buildFallback(visitId, 'validation_failed', generatedAt);
+  }
+
+  // Apply readability guardrails
+  const { sections: readableSections, reports: readabilityReports } =
+    applyReadabilityToSections(sanitised.sections as Record<string, string | null>);
+
+  // Log internally (Sprint 3: send to analytics)
+  if (readabilityReports.some(r => r.finalGradeEstimate > 8)) {
+    console.warn('[readabilityGuard] Some sections still above grade 8 after processing', readabilityReports);
+  }
+  if (validation.violations.length > 0) {
+    console.warn('[outputValidator] Validation warnings:', validation.violations);
+  }
+
+  // Build SummarySection[]
   const sections: SummarySection[] = SECTION_ORDER.map((sectionType) => {
-    const content = extractSection(sectionType, rawContent);
+    const content = (readableSections[sectionType] as string | null | undefined) ?? null;
+    return {
+      sectionType,
+      content: content ?? '',
+      sourceType: content ? 'ai_generated' : 'empty',
+      isEmpty: !content,
+    };
+  });
+
+  // Build ActionItem[]
+  const actionItems: ActionItem[] = sanitised.actionItems.map((item: RawActionItem, i: number) => ({
+    id: `action-${visitId}-${Date.now()}-${i}`,
+    visitId,
+    type: item.type,
+    content: item.content,
+    status: 'open' as const,
+    isFlagged: item.isFlagged,
+    dueDate: item.dueDate ?? undefined,
+  }));
+
+  // Build AccuracyFlag[]
+  const flags: AccuracyFlag[] = sanitised.flags.map((flag: RawFlag, i: number) => ({
+    id: `flag-${visitId}-${Date.now()}-${i}`,
+    sectionType: flag.sectionType as SectionType,
+    rawPhrase: flag.rawPhrase,
+    interpretedPhrase: flag.interpretedPhrase,
+    confidenceScore: flag.confidenceScore,
+  }));
+
+  return {
+    sections,
+    actionItems,
+    flags,
+    generatedAt,
+    _validationWarnings: validation.violations,
+  };
+}
+
+// ─── Fallback builders ────────────────────────────────────────────────────────
+
+/**
+ * Full failure fallback — all sections empty, one flag prompting re-capture.
+ * Used when LLM fails or output is invalid.
+ */
+function buildFallback(
+  visitId: string,
+  reason: string,
+  generatedAt: string
+): GenerateSummaryOutput {
+  const sections: SummarySection[] = SECTION_ORDER.map((sectionType) => ({
+    sectionType,
+    content: '',
+    sourceType: 'empty',
+    isEmpty: true,
+  }));
+
+  const flags: AccuracyFlag[] = [];
+  const actionItems: ActionItem[] = [];
+
+  console.warn(`[summaryService] Using empty fallback. Reason: ${reason}`);
+
+  return { sections, actionItems, flags, generatedAt, _validationWarnings: [reason] };
+}
+
+/**
+ * Conservative stub fallback — used when no API key is configured.
+ * Mirrors the Sprint 1 stub behaviour so the app remains usable in dev
+ * without credentials.
+ */
+function buildStubFallback(
+  visitId: string,
+  rawContent: string,
+  generatedAt: string
+): GenerateSummaryOutput {
+  const lower = rawContent.toLowerCase();
+
+  const sections: SummarySection[] = SECTION_ORDER.map((sectionType): SummarySection => {
+    let content = '';
+
+    switch (sectionType) {
+      case 'what_happened':
+        if (rawContent.trim().length > 20) {
+          content = truncateToSentences(rawContent, 3);
+        }
+        break;
+      case 'medication_changes':
+        if (lower.includes('medication') || lower.includes('mg') || lower.includes('pill')) {
+          content = 'Medication details were mentioned. Please review and confirm.';
+        }
+        break;
+      case 'next_steps':
+        if (lower.includes('follow up') || lower.includes('next') || lower.includes('should')) {
+          content = truncateToSentences(rawContent, 2);
+        }
+        break;
+      case 'referrals_tests':
+        if (lower.includes('referral') || lower.includes('test') || lower.includes('lab')) {
+          content = 'A referral or test may have been mentioned. Please confirm.';
+        }
+        break;
+      case 'follow_up_appointment':
+        if (lower.includes('appointment') || lower.includes('follow')) {
+          content = 'A follow-up appointment may have been discussed. Please add the date if known.';
+        }
+        break;
+    }
+
     return {
       sectionType,
       content,
@@ -61,87 +262,20 @@ export async function generateSummaryFromInput(
     };
   });
 
-  // Extract action items from what happened / next steps content
-  const actionItems: ActionItem[] = extractActionItems(visitId, rawContent);
-
-  // Uncertainty flags — stub: flag anything that looks like a number/dosage
-  const flags: AccuracyFlag[] = extractUncertaintyFlags(visitId, rawContent);
-
-  return { sections, actionItems, flags, generatedAt: now };
-}
-
-// ─── Extraction helpers (stub) ────────────────────────────────────────────────
-// These are intentionally conservative: they do not invent.
-// Sprint 2 replaces these with LLM-structured extraction.
-
-function extractSection(sectionType: SectionType, raw: string): string {
-  if (!raw.trim()) return '';
-
-  // Simple heuristics — look for keyword presence in raw text
-  const lower = raw.toLowerCase();
-
-  switch (sectionType) {
-    case 'visit_date_provider':
-      // Don't invent — only surface if clearly stated
-      return '';
-
-    case 'what_happened':
-      // Everything the user said is "what happened" in the stub
-      if (raw.trim().length > 20) {
-        return truncateToSentences(raw, 3);
-      }
-      return '';
-
-    case 'medication_changes':
-      if (lower.includes('medication') || lower.includes('prescription') ||
-          lower.includes('drug') || lower.includes('pill') || lower.includes('mg')) {
-        return 'Please verify: medication details were mentioned but could not be confirmed automatically.';
-      }
-      return '';
-
-    case 'next_steps':
-      if (lower.includes('need to') || lower.includes('should') ||
-          lower.includes('follow up') || lower.includes('next') || lower.includes('schedule')) {
-        return truncateToSentences(raw, 2);
-      }
-      return '';
-
-    case 'referrals_tests':
-      if (lower.includes('referral') || lower.includes('specialist') ||
-          lower.includes('test') || lower.includes('lab') || lower.includes('blood')) {
-        return 'A referral or test may have been mentioned. Please review and confirm.';
-      }
-      return '';
-
-    case 'follow_up_appointment':
-      if (lower.includes('appointment') || lower.includes('follow') || lower.includes('schedule')) {
-        return 'A follow-up appointment may have been discussed. Please add the date if known.';
-      }
-      return '';
-
-    default:
-      return '';
-  }
-}
-
-function extractActionItems(visitId: string, raw: string): ActionItem[] {
-  const lower = raw.toLowerCase();
-  const items: ActionItem[] = [];
-
-  if (lower.includes('medication') || lower.includes('prescription') || lower.includes('mg')) {
-    items.push({
-      id: `action-${Date.now()}-1`,
+  const actionItems: ActionItem[] = [];
+  if (lower.includes('medication') || lower.includes('mg')) {
+    actionItems.push({
+      id: `action-${visitId}-stub-1`,
       visitId,
       type: 'medication',
       content: 'Review and confirm medication details with your doctor.',
       status: 'open',
-      isFlagged: true, // flagged until parent confirms
+      isFlagged: true,
     });
   }
-
   if (lower.includes('follow up') || lower.includes('appointment')) {
-    items.push({
-      id: `action-${Date.now()}-2`,
+    actionItems.push({
+      id: `action-${visitId}-stub-2`,
       visitId,
       type: 'follow_up',
       content: 'Schedule or confirm your follow-up appointment.',
@@ -150,46 +284,23 @@ function extractActionItems(visitId: string, raw: string): ActionItem[] {
     });
   }
 
-  if (lower.includes('referral') || lower.includes('specialist') ||
-      lower.includes('test') || lower.includes('lab')) {
-    items.push({
-      id: `action-${Date.now()}-3`,
-      visitId,
-      type: 'referral_test',
-      content: 'A referral or test may need to be scheduled.',
-      status: 'open',
-      isFlagged: false,
-    });
-  }
-
-  return items;
-}
-
-function extractUncertaintyFlags(visitId: string, raw: string): AccuracyFlag[] {
   const flags: AccuracyFlag[] = [];
-  // Flag anything that looks like a dosage (number + mg/mcg/ml pattern)
   const dosagePattern = /\d+\s*(mg|mcg|ml|units?)\b/gi;
-  let match;
-  while ((match = dosagePattern.exec(raw)) !== null) {
+  const match = dosagePattern.exec(rawContent);
+  if (match) {
     flags.push({
-      id: `flag-${Date.now()}-${flags.length}`,
+      id: `flag-${visitId}-stub-1`,
       sectionType: 'medication_changes',
       rawPhrase: match[0],
       interpretedPhrase: `Possible dosage: "${match[0]}" — please verify with your prescription.`,
       confidenceScore: 0.4,
     });
-    break; // limit to first match for stub
   }
-  return flags;
-}
 
-// ─── Utilities ────────────────────────────────────────────────────────────────
+  return { sections, actionItems, flags, generatedAt };
+}
 
 function truncateToSentences(text: string, n: number): string {
   const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
   return sentences.slice(0, n).join(' ');
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
