@@ -26,6 +26,7 @@ import { Colors, Spacing, Radius, Typography, Motion } from '../design/tokens';
 import { H2, Body, Caption, Button } from '../components/ui';
 import { useAppState } from '../state/AppContext';
 import { generateSummaryFromInput } from '../services/summaryService';
+import { transcribeAudio, TranscriptionError, TRANSCRIPTION_ERROR_MESSAGES } from '../services/transcriptionService';
 import { RootStackParamList } from '../navigation/types';
 import { SECTION_ORDER } from '../contracts/schema';
 
@@ -34,7 +35,17 @@ type Props = {
   route: RouteProp<RootStackParamList, 'Processing'>;
 };
 
-const PROGRESS_MESSAGES = [
+// Messages rotate during generation.
+// Voice captures get an extra first phase for transcription.
+const VOICE_PROGRESS_MESSAGES = [
+  'Listening to your recording…',
+  'Reading your notes…',
+  'Organizing what happened…',
+  'Checking for next steps…',
+  'Almost ready…',
+];
+
+const TEXT_PROGRESS_MESSAGES = [
   'Reading your notes…',
   'Organizing what happened…',
   'Checking for next steps…',
@@ -48,7 +59,12 @@ export default function ProcessingScreen({ navigation, route }: Props) {
 
   const [phaseIndex, setPhaseIndex] = useState(0);
   const [hasError, setHasError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isDelayed, setIsDelayed] = useState(false);
+
+  // Pick correct message list based on capture type
+  const isVoiceCapture = captureInput.inputType === 'voice';
+  const PROGRESS_MESSAGES = isVoiceCapture ? VOICE_PROGRESS_MESSAGES : TEXT_PROGRESS_MESSAGES;
 
   const pulseAnim = useRef(new Animated.Value(0.6)).current;
   const phaseTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -94,20 +110,34 @@ export default function ProcessingScreen({ navigation, route }: Props) {
     };
   }, []);
 
-  // Run generation
+  // Run transcription (voice) then generation
   useEffect(() => {
     let cancelled = false;
 
-    async function runGeneration() {
+    async function runPipeline() {
       try {
+        let rawText = captureInput.rawText ?? '';
+
+        // Step 1: Transcription (voice captures only)
+        if (captureInput.inputType === 'voice' && captureInput.rawUri) {
+          // Phase index 0 = "Listening to your recording…"
+          const transcript = await transcribeAudio(
+            captureInput.rawUri,
+            (captureInput.language as 'en' | 'es') ?? 'en'
+          );
+          if (cancelled) return;
+          rawText = transcript;
+          setPhaseIndex(1); // advance to LLM phases
+        }
+
+        // Step 2: LLM summarisation
         const result = await generateSummaryFromInput(visitId, {
-          rawText: captureInput.rawText,
+          rawText,
           language: (captureInput.language as 'en' | 'es') ?? 'en',
         });
 
         if (cancelled) return;
 
-        // Merge generated data into the summary
         dispatch({
           type: 'UPDATE_SUMMARY',
           summaryId: visitId,
@@ -120,17 +150,21 @@ export default function ProcessingScreen({ navigation, route }: Props) {
         });
 
         dispatch({ type: 'SET_ACTIVE_SUMMARY', summaryId: visitId });
-
-        // Navigate to review — replace so back button goes home
         navigation.replace('SummaryReview', { summaryId: visitId });
       } catch (err) {
-        if (!cancelled) {
-          setHasError(true);
+        if (cancelled) return;
+
+        // Transcription errors get specific user messages
+        if (err instanceof TranscriptionError) {
+          setErrorMessage(TRANSCRIPTION_ERROR_MESSAGES[err.code]);
+        } else {
+          setErrorMessage(null); // generic message shown in UI
         }
+        setHasError(true);
       }
     }
 
-    runGeneration();
+    runPipeline();
     return () => { cancelled = true; };
   }, [visitId, captureInput, dispatch, navigation]);
 
@@ -143,13 +177,14 @@ export default function ProcessingScreen({ navigation, route }: Props) {
           <Text style={styles.errorEmoji}>🔌</Text>
           <H2 style={styles.errorTitle}>Something went wrong</H2>
           <Body color={Colors.textSecondary} style={styles.errorBody}>
-            We couldn't finish that summary yet. Your recording is safe. Try again when you're connected.
+            {errorMessage ?? "We couldn't finish that summary yet. Your recording is safe. Try again when you're connected."}
           </Body>
           <Button
             testID="btn-retry"
             label="Try again"
             onPress={() => {
               setHasError(false);
+              setErrorMessage(null);
             }}
             style={{ marginTop: Spacing.lg }}
           />

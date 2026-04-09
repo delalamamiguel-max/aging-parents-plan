@@ -25,7 +25,9 @@ import {
   Alert,
   Platform,
   KeyboardAvoidingView,
+  Linking,
 } from 'react-native';
+import { Audio } from 'expo-av';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { Colors, Spacing, Radius, Typography, Shadow, TouchTarget, Motion } from '../design/tokens';
@@ -56,43 +58,105 @@ export default function CaptureScreen({ navigation, route }: Props) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
 
+  const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingStartRef = useRef<number>(0);
+
+  // ─── Permission ──────────────────────────────────────────────────────────
+
+  const requestMicPermission = useCallback(async (): Promise<boolean> => {
+    const { status } = await Audio.requestPermissionsAsync();
+    if (status === 'granted') return true;
+    Alert.alert(
+      'Microphone access needed',
+      'Aging Parents Plan needs your microphone to record your visit. You can enable it in Settings.',
+      [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Open Settings', onPress: () => Linking.openSettings() },
+      ]
+    );
+    return false;
+  }, []);
 
   // ─── Recording controls ───────────────────────────────────────────────────
 
   const startRecording = useCallback(async () => {
-    // Device audio permission handled by expo-av in the real implementation
-    // For Sprint 1 stub: simulate recording state
-    setIsRecording(true);
-    setIsPaused(false);
-    setRecordingSeconds(0);
-    recordingStartRef.current = Date.now();
+    const hasPermission = await requestMicPermission();
+    if (!hasPermission) return;
 
-    recordingIntervalRef.current = setInterval(() => {
-      setRecordingSeconds((s) => s + 1);
-    }, 1000);
-  }, []);
+    try {
+      // Configure audio session for recording
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
 
-  const pauseRecording = useCallback(() => {
-    setIsPaused(true);
-    if (recordingIntervalRef.current) {
-      clearInterval(recordingIntervalRef.current);
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+
+      recordingRef.current = recording;
+      recordingStartRef.current = Date.now();
+
+      setIsRecording(true);
+      setIsPaused(false);
+      setRecordingSeconds(0);
+
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingSeconds((s) => s + 1);
+      }, 1000);
+    } catch (err) {
+      console.error('[CaptureScreen] Failed to start recording:', err);
+      Alert.alert(
+        'Could not start recording',
+        'Please try again. If the problem continues, restart the app.'
+      );
+    }
+  }, [requestMicPermission]);
+
+  const pauseRecording = useCallback(async () => {
+    if (!recordingRef.current) return;
+    try {
+      await recordingRef.current.pauseAsync();
+      setIsPaused(true);
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+    } catch (err) {
+      console.error('[CaptureScreen] Failed to pause recording:', err);
     }
   }, []);
 
-  const resumeRecording = useCallback(() => {
-    setIsPaused(false);
-    recordingIntervalRef.current = setInterval(() => {
-      setRecordingSeconds((s) => s + 1);
-    }, 1000);
+  const resumeRecording = useCallback(async () => {
+    if (!recordingRef.current) return;
+    try {
+      await recordingRef.current.startAsync(); // resume from paused state
+      setIsPaused(false);
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingSeconds((s) => s + 1);
+      }, 1000);
+    } catch (err) {
+      console.error('[CaptureScreen] Failed to resume recording:', err);
+    }
   }, []);
 
   const stopRecording = useCallback(async () => {
-    if (recordingIntervalRef.current) {
-      clearInterval(recordingIntervalRef.current);
+    if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+
+    let audioUri: string | undefined;
+
+    if (recordingRef.current) {
+      try {
+        await recordingRef.current.stopAndUnloadAsync();
+        audioUri = recordingRef.current.getURI() ?? undefined;
+        recordingRef.current = null;
+        // Reset audio session
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      } catch (err) {
+        console.error('[CaptureScreen] Failed to stop recording:', err);
+      }
     }
+
     setIsRecording(false);
+    setAudioUri(audioUri);
 
     // Under 30 seconds: prompt to add notes
     if (recordingSeconds < 30) {
@@ -101,19 +165,22 @@ export default function CaptureScreen({ navigation, route }: Props) {
         'Your recording was under 30 seconds. Would you like to add any notes before generating your summary?',
         [
           { text: 'Add notes', onPress: () => setActiveMode('text') },
-          { text: 'Continue anyway', onPress: submitCapture },
+          { text: 'Continue anyway', onPress: () => submitCapture(audioUri) },
         ]
       );
       return;
     }
 
-    submitCapture();
+    submitCapture(audioUri);
   }, [recordingSeconds]);
+
+  // ─── State for audio URI captured from real recording ────────────────────
+  const [audioUri, setAudioUri] = useState<string | undefined>();
 
   // ─── Submission ───────────────────────────────────────────────────────────
 
-  const submitCapture = useCallback(async () => {
-    // Must have at least some input
+  const submitCapture = useCallback(async (capturedAudioUri?: string) => {
+    // Must have at least some input (text mode)
     if (activeMode === 'text' && !textInput.trim()) {
       Alert.alert('Nothing to save', 'Please type or speak before submitting.');
       return;
@@ -128,7 +195,8 @@ export default function CaptureScreen({ navigation, route }: Props) {
       visitId,
       inputType: activeMode as CaptureInputType,
       rawText: activeMode === 'text' ? textInput : undefined,
-      language: 'en',
+      rawUri: capturedAudioUri ?? audioUri,   // real audio file URI
+      language: state.language,              // use global language preference
       isOffline: state.isOffline,
       capturedAt: now,
     };
