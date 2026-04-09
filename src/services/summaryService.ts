@@ -71,7 +71,7 @@ export async function generateSummaryFromInput(
     const userPrompt = buildUserPrompt({ rawText: rawContent, visitDate, language });
     const rawResponse = await callLLM(SUMMARY_SYSTEM_PROMPT, userPrompt);
 
-    return procesLLMResponse(rawResponse, rawContent, visitId, visitDate, generatedAt);
+    return processLLMResponse(rawResponse, rawContent, visitId, visitDate, generatedAt);
   } catch (err) {
     const code = err instanceof LLMError ? err.code : 'unknown';
     console.error(`[summaryService] LLM call failed (${code}):`, err);
@@ -102,7 +102,7 @@ export async function regenerateSummaryWithCorrection(
 
   try {
     const rawResponse = await callLLM(SUMMARY_SYSTEM_PROMPT, userPrompt);
-    return procesLLMResponse(rawResponse, correction, visitId, visitDate, generatedAt);
+    return processLLMResponse(rawResponse, correction, visitId, visitDate, generatedAt);
   } catch (err) {
     console.error('[summaryService] Regeneration failed:', err);
     return buildFallback(visitId, 'regeneration_failed', generatedAt);
@@ -111,7 +111,7 @@ export async function regenerateSummaryWithCorrection(
 
 // ─── Internal: process LLM response → GenerateSummaryOutput ─────────────────
 
-function procesLLMResponse(
+function processLLMResponse(
   rawResponse: string,
   rawInput: string,
   visitId: string,
