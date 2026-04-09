@@ -76,6 +76,11 @@ export default function ReminderSetupScreen({ navigation, route }: Props) {
   const current = eligibleItems[currentIndex];
 
   const computeDefaultTime = (item: ActionItem): string => {
+    // Prefer the parsed follow-up date from the summary when available.
+    // Only fall back to now + offset when no due date was extracted.
+    if (item.dueDate) {
+      return item.dueDate;
+    }
     const offsets = DEFAULT_REMINDER_OFFSETS_HOURS[item.type];
     const firstOffset = offsets[0] ?? 24;
     return addHours(new Date(), firstOffset).toISOString();

@@ -420,7 +420,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.sm,
     paddingHorizontal: Spacing.sm,
     paddingVertical: 3,
-    alignSelf: 'flex-start',
+    flexShrink: 0,
   },
   divider: {
     height: 1,

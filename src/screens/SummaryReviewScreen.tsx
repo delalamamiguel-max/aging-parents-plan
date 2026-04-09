@@ -245,20 +245,22 @@ export default function SummaryReviewScreen({ navigation, route }: Props) {
 
           return (
             <View key={sectionType} style={styles.sectionContainer} testID={`section-${sectionType}`}>
-              {/* Section header */}
+              {/* Section header — label row + badge row to avoid flex squeeze */}
               <View style={styles.sectionHeader}>
-                <H4 style={styles.sectionLabel}>
-                  {SECTION_LABELS[sectionType]}
-                </H4>
+                <View style={styles.sectionLabelRow}>
+                  <H4 style={styles.sectionLabel}>
+                    {SECTION_LABELS[sectionType]}
+                  </H4>
+                  {section.sourceType === 'parent_edited' && (
+                    <View style={styles.editedBadge} testID={`edited-badge-${sectionType}`}>
+                      <MicroLabel color={Colors.success} style={{ letterSpacing: 0.3 }}>
+                        Edited by you
+                      </MicroLabel>
+                    </View>
+                  )}
+                </View>
                 {section.sourceType === 'ai_generated' && (
                   <AIGeneratedBadge testID={`ai-badge-${sectionType}`} />
-                )}
-                {section.sourceType === 'parent_edited' && (
-                  <View style={styles.editedBadge} testID={`edited-badge-${sectionType}`}>
-                    <MicroLabel color={Colors.success} style={{ letterSpacing: 0.3 }}>
-                      Edited by you
-                    </MicroLabel>
-                  </View>
                 )}
               </View>
 
@@ -478,13 +480,16 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   sectionHeader: {
+    gap: 4,
+  },
+  sectionLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.sm,
+    gap: Spacing.xs,
   },
   sectionLabel: {
     flex: 1,
+    flexShrink: 1,
     color: Colors.textSecondary,
   },
   editedBadge: {

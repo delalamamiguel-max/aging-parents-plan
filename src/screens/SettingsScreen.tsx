@@ -34,7 +34,8 @@ export default function SettingsScreen({ navigation }: Props) {
 
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [missedVisitReminder, setMissedVisitReminder] = useState(true);
-  const [language, setLanguage] = useState<'en' | 'es'>('en');
+  // Language read from global state so it persists across navigation and reloads
+  const language = state.language;
 
   const handleUnlink = () => {
     if (!link) return;
@@ -127,7 +128,7 @@ export default function SettingsScreen({ navigation }: Props) {
                 key={lang}
                 testID={`lang-${lang}`}
                 style={[styles.langButton, language === lang && styles.langButtonActive]}
-                onPress={() => setLanguage(lang)}
+                onPress={() => dispatch({ type: 'SET_LANGUAGE', language: lang })}
                 activeOpacity={0.82}
               >
                 <Caption

@@ -43,6 +43,9 @@ interface AppState {
   processingMessage: string;
   isOffline: boolean;
   offlineCaptureQueue: CaptureInput[];
+
+  // Preferences
+  language: 'en' | 'es';
 }
 
 const initialState: AppState = {
@@ -58,6 +61,7 @@ const initialState: AppState = {
   processingMessage: '',
   isOffline: false,
   offlineCaptureQueue: [],
+  language: 'en',
 };
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
@@ -78,6 +82,7 @@ type AppAction =
   | { type: 'SHARE_SUMMARY'; summaryId: string; sharedAt: string }
   | { type: 'REVOKE_SUMMARY'; summaryId: string; revokedAt: string }
   | { type: 'SET_SUMMARY_STATUS'; summaryId: string; status: SummaryStatus }
+  | { type: 'SET_LANGUAGE'; language: 'en' | 'es' }
   | { type: 'HYDRATE'; state: Partial<AppState> };
 
 // ─── Reducer ──────────────────────────────────────────────────────────────────
@@ -177,6 +182,9 @@ function reducer(state: AppState, action: AppAction): AppState {
         ),
       };
 
+    case 'SET_LANGUAGE':
+      return { ...state, language: action.language };
+
     case 'HYDRATE':
       return { ...state, ...action.state };
 
@@ -228,6 +236,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       link: state.link,
       sharedSummaryIds: state.sharedSummaryIds,
       offlineCaptureQueue: state.offlineCaptureQueue,
+      language: state.language,
     };
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(toPersist));
   }, [
@@ -238,6 +247,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     state.link,
     state.sharedSummaryIds,
     state.offlineCaptureQueue,
+    state.language,
   ]);
 
   const activeSummary =
