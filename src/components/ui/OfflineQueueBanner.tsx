@@ -15,7 +15,10 @@ export function OfflineQueueBanner() {
   const [isOnline, setIsOnline] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const queueLength = state.offlineCaptureQueue.length;
+  const visibleQueue = state.offlineCaptureQueue.filter(
+    (c) => c.id !== state.currentlyProcessingQueueId
+  );
+  const queueLength = visibleQueue.length;
 
   // Poll network status to know if we can flush
   useEffect(() => {
@@ -34,11 +37,11 @@ export function OfflineQueueBanner() {
     if (!isOnline) return;
     setIsProcessing(true);
 
-    // Get the oldest capture
-    const captureToProcess = state.offlineCaptureQueue[0];
+    // Get the oldest visible capture
+    const captureToProcess = visibleQueue[0];
     
-    // Optimistically dequeue
-    dispatch({ type: 'DEQUEUE_OFFLINE_CAPTURE', captureId: captureToProcess.id });
+    // Mark as processing instead of immediate dequeue
+    dispatch({ type: 'START_OFFLINE_PROCESSING', captureId: captureToProcess.id });
     
     // Change summary status to processing
     dispatch({

@@ -7,7 +7,6 @@
  */
 
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   VisitSummary,
   CaptureInput,
@@ -18,6 +17,8 @@ import {
   SECTION_ORDER,
   SummaryStatus,
 } from '../contracts/schema';
+import { readState, writeState } from './storage/utils';
+import { PersistedState } from './storage/types';
 
 // ─── State shape ──────────────────────────────────────────────────────────────
 
@@ -46,6 +47,12 @@ interface AppState {
 
   // Preferences
   language: 'en' | 'es';
+
+  // Persistence
+  isHydrated: boolean; // true once initial load from disk finishes
+  
+  // Offline State Tracking
+  currentlyProcessingQueueId: string | null;
 }
 
 const initialState: AppState = {
@@ -62,6 +69,8 @@ const initialState: AppState = {
   isOffline: false,
   offlineCaptureQueue: [],
   language: 'en',
+  isHydrated: false,
+  currentlyProcessingQueueId: null,
 };
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
@@ -83,7 +92,9 @@ type AppAction =
   | { type: 'REVOKE_SUMMARY'; summaryId: string; revokedAt: string }
   | { type: 'SET_SUMMARY_STATUS'; summaryId: string; status: SummaryStatus }
   | { type: 'SET_LANGUAGE'; language: 'en' | 'es' }
-  | { type: 'HYDRATE'; state: Partial<AppState> };
+  | { type: 'HYDRATE'; state: Partial<AppState> }
+  | { type: 'START_OFFLINE_PROCESSING'; captureId: string }
+  | { type: 'CANCEL_OFFLINE_PROCESSING' };
 
 // ─── Reducer ──────────────────────────────────────────────────────────────────
 
@@ -147,7 +158,14 @@ function reducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         offlineCaptureQueue: state.offlineCaptureQueue.filter((c) => c.id !== action.captureId),
+        currentlyProcessingQueueId: null, // clear marker on successful dequeue
       };
+
+    case 'START_OFFLINE_PROCESSING':
+      return { ...state, currentlyProcessingQueueId: action.captureId };
+
+    case 'CANCEL_OFFLINE_PROCESSING':
+      return { ...state, currentlyProcessingQueueId: null };
 
     case 'SET_LINK':
       return { ...state, link: action.link };
@@ -186,7 +204,7 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, language: action.language };
 
     case 'HYDRATE':
-      return { ...state, ...action.state };
+      return { ...state, ...action.state, isHydrated: true };
 
     default:
       return state;
@@ -207,28 +225,26 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
-const STORAGE_KEY = '@app_state_v1';
-
 export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  // Hydrate from AsyncStorage on mount
+  // Hydrate from Storage on mount
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
-      if (raw) {
-        try {
-          const saved = JSON.parse(raw) as Partial<AppState>;
-          dispatch({ type: 'HYDRATE', state: saved });
-        } catch {
-          // corrupted storage — start fresh
-        }
+    readState().then((savedState) => {
+      if (savedState) {
+        dispatch({ type: 'HYDRATE', state: savedState });
+      } else {
+        // No saved state or error — still mark as hydrated to allow new saves
+        dispatch({ type: 'HYDRATE', state: {} });
       }
     });
   }, []);
 
   // Persist on every state change (only key fields)
   useEffect(() => {
-    const toPersist: Partial<AppState> = {
+    if (!state.isHydrated) return; // DON'T persist until hydration finished
+
+    const toPersist: PersistedState = {
       currentRole: state.currentRole,
       parentId: state.parentId,
       adultChildId: state.adultChildId,
@@ -238,8 +254,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       offlineCaptureQueue: state.offlineCaptureQueue,
       language: state.language,
     };
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(toPersist));
+    writeState(toPersist);
   }, [
+    state.isHydrated,
     state.currentRole,
     state.parentId,
     state.adultChildId,

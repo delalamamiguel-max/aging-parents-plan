@@ -173,6 +173,10 @@ export default function ProcessingScreen({ navigation, route }: Props) {
           },
         });
 
+        if (captureInput.isOffline) {
+          dispatch({ type: 'DEQUEUE_OFFLINE_CAPTURE', captureId: captureInput.id });
+        }
+
         if (isAssisted) {
            Alert.alert(
                'Sent for review',
@@ -193,6 +197,9 @@ export default function ProcessingScreen({ navigation, route }: Props) {
         } else {
           setErrorMessage(null);
           analytics.trackCaptureFailed('llm_generation_error', captureInput.inputType as CaptureInputType);
+        }
+        if (captureInput.isOffline) {
+          dispatch({ type: 'CANCEL_OFFLINE_PROCESSING' });
         }
         setHasError(true);
       }
