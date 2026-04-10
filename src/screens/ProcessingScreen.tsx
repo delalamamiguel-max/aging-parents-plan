@@ -30,7 +30,8 @@ import { generateSummaryFromInput } from '../services/summaryService';
 import { transcribeAudio, TranscriptionError, TRANSCRIPTION_ERROR_MESSAGES } from '../services/transcriptionService';
 import { isTranscriptionConfigured, getAIConfigSummary } from '../config/env';
 import { RootStackParamList } from '../navigation/types';
-import { SECTION_ORDER } from '../contracts/schema';
+import { SECTION_ORDER, CaptureInputType } from '../contracts/schema';
+import { analytics } from '../services/analyticsService';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Processing'>;
@@ -156,6 +157,9 @@ export default function ProcessingScreen({ navigation, route }: Props) {
         if (cancelled) return;
         console.log(`[ProcessingScreen] LLM complete. Sections: ${result.sections.filter(s => !s.isEmpty).length} filled`);
 
+        const durationSecs = Math.floor((Date.now() - new Date(captureInput.capturedAt).getTime()) / 1000);
+        analytics.trackCaptureCompleted(durationSecs, captureInput.inputType as CaptureInputType, captureInput.isOffline);
+
         const isAssisted = state.currentRole === 'adult_child';
 
         dispatch({
@@ -185,8 +189,10 @@ export default function ProcessingScreen({ navigation, route }: Props) {
 
         if (err instanceof TranscriptionError) {
           setErrorMessage(TRANSCRIPTION_ERROR_MESSAGES[err.code]);
+          analytics.trackCaptureFailed(`transcription_error_${err.code}`, captureInput.inputType as CaptureInputType);
         } else {
           setErrorMessage(null);
+          analytics.trackCaptureFailed('llm_generation_error', captureInput.inputType as CaptureInputType);
         }
         setHasError(true);
       }

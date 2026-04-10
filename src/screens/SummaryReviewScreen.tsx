@@ -45,6 +45,7 @@ import {
   REQUIRED_DISCLAIMER, AccuracyFlag,
 } from '../contracts/schema';
 import { RootStackParamList } from '../navigation/types';
+import { analytics } from '../services/analyticsService';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'SummaryReview'>;
@@ -149,6 +150,12 @@ export default function SummaryReviewScreen({ navigation, route }: Props) {
       summaryId,
       updates: { reviewedAt: new Date().toISOString() },
     });
+    
+    analytics.trackEvent('summary_saved_private', {
+      hasUncertainFlags,
+      sectionsEdited: summary.sections.filter(s => s.sourceType === 'parent_edited').length,
+    });
+
     setIsSaving(false);
     setHasReviewed(true);
     Alert.alert(
@@ -171,6 +178,7 @@ export default function SummaryReviewScreen({ navigation, route }: Props) {
         approvalStatus: 'approved',
       },
     });
+    analytics.trackEvent('summary_approved', { submitter: summary.submitter });
     Alert.alert('Approved', 'You can now edit any details, set reminders, or save this visit.', [{ text: 'OK' }]);
   };
 
@@ -192,6 +200,7 @@ export default function SummaryReviewScreen({ navigation, route }: Props) {
                 approvalStatus: 'rejected',
               },
             });
+            analytics.trackEvent('summary_rejected', { submitter: summary.submitter });
             navigation.navigate('ParentHome');
           }
         }

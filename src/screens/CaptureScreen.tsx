@@ -39,6 +39,7 @@ import { RootStackParamList } from '../navigation/types';
 import { useAppState } from '../state/AppContext';
 import { CaptureInput, CaptureInputType, SECTION_ORDER } from '../contracts/schema';
 import * as Network from 'expo-network';
+import { analytics } from '../services/analyticsService';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Capture'>;
@@ -185,6 +186,8 @@ export default function CaptureScreen({ navigation, route }: Props) {
       Alert.alert('Nothing to save', 'Please type or speak before submitting.');
       return;
     }
+
+    analytics.trackCaptureStarted(activeMode as CaptureInputType, state.currentRole as 'parent' | 'adult_child');
 
     const visitId = `visit-${Date.now()}`;
     const captureId = `capture-${Date.now()}`;

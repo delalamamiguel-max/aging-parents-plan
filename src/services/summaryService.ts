@@ -132,6 +132,7 @@ function processLLMResponse(
   const sanitised = validation.sanitisedOutput;
 
   if (!sanitised) {
+    console.warn('[processLLMResponse] Validation fully failed:', validation.violations);
     return buildFallback(visitId, 'validation_failed', generatedAt);
   }
 

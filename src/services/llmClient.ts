@@ -108,7 +108,7 @@ async function callOllama(
 
   const body = {
     model: ENV.OLLAMA_MODEL,
-    format: 'json',
+    // format: 'json', // Removed because Gemma 3 might return empty {} with this flag
     stream: false,
     messages: [
       { role: 'system', content: systemPrompt },
