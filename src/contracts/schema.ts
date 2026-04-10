@@ -158,6 +158,57 @@ export interface ShareRecord {
   revokedAt?: string;
 }
 
+// ─── Pipeline outcome / error contract (capture → processing → summary) ───────
+// Source: docs/architecture.md; docs/adr/ADR-001-pipeline-outcome-contract.md
+// Wire-up in services/screens is future work; types are shared contract only.
+
+/** How a capture processing run finished (orthogonal to `SummaryStatus`). */
+export type PipelineOutcomeStatus =
+  | 'success'
+  | 'fallback_used'
+  | 'retryable_failure'
+  | 'non_retryable_failure';
+
+/**
+ * Machine-readable codes for transcription errors, LLM errors passed into
+ * summary fallbacks, summary `buildFallback` reasons, and screen-level failures.
+ * String values match `transcriptionService`, `llmClient`, and `summaryService` today.
+ */
+export const PipelineErrorCode = {
+  NoSpeech: 'no_speech',
+  Auth: 'auth',
+  Network: 'network',
+  Timeout: 'timeout',
+  FormatError: 'format_error',
+  ServerError: 'server_error',
+  Parse: 'parse',
+  ProviderError: 'provider_error',
+  NoInput: 'no_input',
+  ParseError: 'parse_error',
+  ValidationFailed: 'validation_failed',
+  NotConfigured: 'not_configured',
+  RegenerationFailed: 'regeneration_failed',
+  Unknown: 'unknown',
+  /** ProcessingScreen catch-all / analytics when a non-transcription throw escapes. */
+  LlmGenerationError: 'llm_generation_error',
+  /** Stub path when the LLM is not configured (reserved for explicit metadata when wired). */
+  StubLlmUnconfigured: 'stub_llm_unconfigured',
+} as const;
+
+export type PipelineErrorCode =
+  (typeof PipelineErrorCode)[keyof typeof PipelineErrorCode];
+
+/** Whether the user received empty-section fallback vs heuristic stub content. */
+export type PipelineFallbackKind = 'empty_output' | 'stub_heuristic';
+
+/** Metadata when `PipelineOutcomeStatus` is `fallback_used` (or embedded in a full result type). */
+export interface PipelineFallbackMetadata {
+  kind: PipelineFallbackKind;
+  reasonCode: PipelineErrorCode;
+  /** e.g. validator warnings from summary pipeline; keep non-PHI. */
+  validationWarnings?: readonly string[];
+}
+
 // ─── Legal disclaimer copy ────────────────────────────────────────────────────
 // Source: masterplan.md §7.6 "Required disclaimer"
 export const REQUIRED_DISCLAIMER =
