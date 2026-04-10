@@ -11,6 +11,7 @@ import { RootStackParamList } from './types';
 
 // Parent screens
 import ParentHomeScreen from '../screens/ParentHomeScreen';
+import AdultChildHomeScreen from '../screens/AdultChildHomeScreen';
 import CaptureScreen from '../screens/CaptureScreen';
 import ProcessingScreen from '../screens/ProcessingScreen';
 import SummaryReviewScreen from '../screens/SummaryReviewScreen';
@@ -21,10 +22,13 @@ import SettingsScreen from '../screens/SettingsScreen';
 
 // Placeholder screens for Sprint 2+
 import PlaceholderScreen from '../screens/PlaceholderScreen';
+import { useAppState } from '../state/AppContext';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function RootNavigator() {
+  const { state } = useAppState();
+
   return (
     <NavigationContainer>
       <Stack.Navigator
@@ -36,8 +40,13 @@ export default function RootNavigator() {
           gestureEnabled: true,
         }}
       >
-        {/* Parent journey */}
-        <Stack.Screen name="ParentHome" component={ParentHomeScreen} />
+        {state.currentRole === 'adult_child' ? (
+          <Stack.Screen name="AdultChildHome" component={AdultChildHomeScreen} />
+        ) : (
+          <Stack.Screen name="ParentHome" component={ParentHomeScreen} />
+        )}
+
+        {/* Shared journey */}
         <Stack.Screen name="Capture" component={CaptureScreen} />
         <Stack.Screen
           name="Processing"
@@ -51,11 +60,6 @@ export default function RootNavigator() {
         <Stack.Screen name="Settings" component={SettingsScreen} />
 
         {/* Sprint 2: Adult child flows — placeholders */}
-        <Stack.Screen
-          name="AdultChildHome"
-          component={PlaceholderScreen}
-          initialParams={{ title: 'Shared summaries', sprint: 2 }}
-        />
         <Stack.Screen
           name="SharedSummary"
           component={PlaceholderScreen}

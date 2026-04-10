@@ -30,6 +30,8 @@ import { useAppState } from '../state/AppContext';
 import { ActionItem, DEFAULT_REMINDER_OFFSETS_HOURS } from '../contracts/schema';
 import { RootStackParamList } from '../navigation/types';
 import { addHours, format, addDays } from 'date-fns';
+import { scheduleLocalReminder } from '../services/notificationService';
+import { addAppointmentToCalendar } from '../services/calendarService';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'ReminderSetup'>;
@@ -103,19 +105,21 @@ export default function ReminderSetupScreen({ navigation, route }: Props) {
     advance();
   };
 
-  const handleCalendarAdd = (item: ActionItem) => {
-    // expo-calendar integration — Sprint 3
-    Alert.alert(
-      'Add to calendar',
-      'This will open your calendar to add the appointment. Calendar integration arrives in the next build.',
-      [{ text: 'OK' }]
-    );
+  const handleCalendarAdd = async (item: ActionItem) => {
     const scheduledAt = item.dueDate ?? computeDefaultTime(item);
-    setDecisions((d) => ({
-      ...d,
-      [item.id]: { actionItemId: item.id, scheduled: true, scheduledAt, calendarAdd: true },
-    }));
-    advance();
+    // expo-calendar integration
+    const eventId = await addAppointmentToCalendar(
+      `${ACTION_LABELS[item.type]}: ${item.content}`,
+      scheduledAt
+    );
+
+    if (eventId) {
+      setDecisions((d) => ({
+        ...d,
+        [item.id]: { actionItemId: item.id, scheduled: true, scheduledAt, calendarAdd: true },
+      }));
+      advance();
+    }
   };
 
   const advance = () => {
@@ -126,13 +130,19 @@ export default function ReminderSetupScreen({ navigation, route }: Props) {
     }
   };
 
-  const handleFinish = () => {
-    // Save reminder decisions to summary action items
-    const updatedItems = actionItems.map((item) => {
+  const handleFinish = async () => {
+    // Save reminder decisions to summary action items and schedule notifications
+    const updatedItems = await Promise.all(actionItems.map(async (item) => {
       const decision = decisions[item.id];
       if (!decision || !decision.scheduled) return item;
+
+      // Schedule local notification if not just added to calendar
+      if (decision.scheduledAt && !decision.calendarAdd) {
+        await scheduleLocalReminder(item.id, decision.scheduledAt);
+      }
+
       return { ...item, status: 'open' as const };
-    });
+    }));
 
     dispatch({
       type: 'UPDATE_SUMMARY',

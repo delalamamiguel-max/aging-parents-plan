@@ -24,6 +24,7 @@ import {
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Colors, Spacing, Radius, Typography, Shadow } from '../design/tokens';
 import { H1, H3, Body, Caption, MicroLabel, Button, Card, EmptyState, Divider } from '../components/ui';
+import { OfflineQueueBanner } from '../components/ui/OfflineQueueBanner';
 import { useAppState } from '../state/AppContext';
 import { VisitSummary, SECTION_LABELS } from '../contracts/schema';
 import { RootStackParamList } from '../navigation/types';
@@ -122,7 +123,10 @@ export default function ParentHomeScreen({ navigation }: Props) {
           </Caption>
         </TouchableOpacity>
 
-        <Divider style={{ marginTop: Spacing.lg }} />
+        <Divider style={{ marginTop: Spacing.lg, marginBottom: Spacing.lg }} />
+
+        {/* Offline queue banner shown when there are offline captures */}
+        <OfflineQueueBanner />
 
         {/* Past summaries */}
         <View style={styles.sectionHeader}>

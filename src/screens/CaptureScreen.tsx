@@ -34,11 +34,11 @@ import { Colors, Spacing, Radius, Typography, Shadow, TouchTarget, Motion } from
 import {
   H2, H3, Body, Caption, MicroLabel, Button, Card, ProcessingState,
 } from '../components/ui';
-import { useAppState } from '../state/AppContext';
-import { CaptureInput, CaptureInputType } from '../contracts/schema';
 import { generateSummaryFromInput } from '../services/summaryService';
 import { RootStackParamList } from '../navigation/types';
-import { SECTION_ORDER } from '../contracts/schema';
+import { useAppState } from '../state/AppContext';
+import { CaptureInput, CaptureInputType, SECTION_ORDER } from '../contracts/schema';
+import * as Network from 'expo-network';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Capture'>;
@@ -190,6 +190,9 @@ export default function CaptureScreen({ navigation, route }: Props) {
     const captureId = `capture-${Date.now()}`;
     const now = new Date().toISOString();
 
+    const networkState = await Network.getNetworkStateAsync();
+    const isActuallyOffline = networkState.isConnected === false || state.isOffline;
+
     const captureInput: CaptureInput = {
       id: captureId,
       visitId,
@@ -197,14 +200,14 @@ export default function CaptureScreen({ navigation, route }: Props) {
       rawText: activeMode === 'text' ? textInput : undefined,
       rawUri: capturedAudioUri ?? audioUri,   // real audio file URI
       language: state.language,              // use global language preference
-      isOffline: state.isOffline,
+      isOffline: isActuallyOffline,
       capturedAt: now,
     };
 
     dispatch({ type: 'SET_PENDING_CAPTURE', capture: captureInput });
     setIsProcessing(true);
 
-    if (state.isOffline) {
+    if (isActuallyOffline) {
       // Queue for deferred processing — no data loss
       dispatch({ type: 'QUEUE_OFFLINE_CAPTURE', capture: captureInput });
       dispatch({
@@ -263,7 +266,7 @@ export default function CaptureScreen({ navigation, route }: Props) {
     dispatch({ type: 'SET_ACTIVE_SUMMARY', summaryId: visitId });
     setIsProcessing(false);
     navigation.navigate('Processing', { visitId, captureInput });
-  }, [activeMode, textInput, state.isOffline, state.parentId, dispatch, navigation]);
+  }, [activeMode, textInput, state.isOffline, state.language, state.parentId, dispatch, navigation, audioUri]);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 

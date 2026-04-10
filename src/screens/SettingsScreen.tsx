@@ -144,6 +144,29 @@ export default function SettingsScreen({ navigation }: Props) {
 
         <Divider />
 
+        {/* Development: Role Toggle */}
+        <View style={styles.section}>
+          <MicroLabel style={styles.sectionLabel}>App view mode (Test)</MicroLabel>
+          <View style={styles.languageRow}>
+            {(['parent', 'adult_child'] as const).map((role) => (
+              <TouchableOpacity
+                key={role}
+                testID={`role-${role}`}
+                style={[styles.langButton, state.currentRole === role && styles.langButtonActive]}
+                onPress={() => dispatch({ type: 'SET_ROLE', role, id: role === 'parent' ? 'parent-local' : 'child-local' })}
+                activeOpacity={0.82}
+              >
+                <Caption
+                  color={state.currentRole === role ? Colors.surfaceElevated : Colors.textPrimary}
+                  style={{ fontWeight: '600' }}
+                >
+                  {role === 'parent' ? 'Parent' : 'Care Partner'}
+                </Caption>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
         {/* Notifications */}
         <View style={styles.section}>
           <MicroLabel style={styles.sectionLabel}>Notifications</MicroLabel>
