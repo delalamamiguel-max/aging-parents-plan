@@ -72,6 +72,25 @@ export default function AdultChildHomeScreen({ navigation }: Props) {
           </Body>
         </View>
 
+        {/* Primary CTA — Assist with capture */}
+        <TouchableOpacity
+          testID="btn-assist-capture"
+          style={styles.primaryCapture}
+          onPress={() => navigation.navigate('Capture')}
+          activeOpacity={0.88}
+        >
+          <View style={styles.primaryCaptureInner}>
+            <View style={styles.captureIcon}>
+              <Text style={styles.captureIconText}>🎙</Text>
+            </View>
+            <View style={styles.primaryCaptureText}>
+              <Text style={styles.primaryCaptureCTA}>Assist with capture</Text>
+              <Text style={styles.primaryCaptureSub}>Log a visit for your parent</Text>
+            </View>
+            <Text style={styles.chevron}>›</Text>
+          </View>
+        </TouchableOpacity>
+
         {/* Tasks View */}
         <TouchableOpacity
           style={styles.tasksBanner}
@@ -186,6 +205,53 @@ const styles = StyleSheet.create({
   tagline: {
     lineHeight: 24,
   },
+
+  // Primary CTA
+  primaryCapture: {
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    borderWidth: 2,
+    borderColor: Colors.primary,
+    marginBottom: Spacing.xl,
+    ...Shadow.medium,
+  },
+  primaryCaptureInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  captureIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  captureIconText: {
+    fontSize: 26,
+  },
+  primaryCaptureText: {
+    flex: 1,
+    gap: 4,
+  },
+  primaryCaptureCTA: {
+    fontSize: Typography.size.h3,
+    fontWeight: '700',
+    color: Colors.primary,
+    letterSpacing: -0.2,
+  },
+  primaryCaptureSub: {
+    fontSize: Typography.size.caption,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+  },
+  chevron: {
+    fontSize: 26,
+    color: Colors.primary,
+  },
+
   tasksBanner: {
     flexDirection: 'row',
     alignItems: 'center',

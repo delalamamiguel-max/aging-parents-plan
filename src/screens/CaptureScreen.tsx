@@ -215,9 +215,9 @@ export default function CaptureScreen({ navigation, route }: Props) {
         summary: {
           id: visitId,
           parentId: state.parentId ?? 'parent-local',
-          submitter: 'parent',
+          submitter: state.currentRole as 'parent' | 'adult_child',
           status: 'draft',
-          approvalStatus: 'not_required',
+          approvalStatus: state.currentRole === 'adult_child' ? 'pending' : 'not_required',
           sections: SECTION_ORDER.map((t) => ({
             sectionType: t,
             content: '',
@@ -246,9 +246,9 @@ export default function CaptureScreen({ navigation, route }: Props) {
       summary: {
         id: visitId,
         parentId: state.parentId ?? 'parent-local',
-        submitter: 'parent',
+        submitter: state.currentRole as 'parent' | 'adult_child',
         status: 'processing',
-        approvalStatus: 'not_required',
+        approvalStatus: state.currentRole === 'adult_child' ? 'pending' : 'not_required',
         sections: SECTION_ORDER.map((t) => ({
           sectionType: t,
           content: '',

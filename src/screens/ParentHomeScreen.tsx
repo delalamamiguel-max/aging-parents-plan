@@ -37,6 +37,7 @@ type Props = {
 export default function ParentHomeScreen({ navigation }: Props) {
   const { state } = useAppState();
   const recentSummaries = state.summaries.slice(0, 10);
+  const pendingApprovals = state.summaries.filter(s => s.status === 'pending_parent_approval');
 
   const handleStartCapture = () => {
     navigation.navigate('Capture');
@@ -127,6 +128,30 @@ export default function ParentHomeScreen({ navigation }: Props) {
 
         {/* Offline queue banner shown when there are offline captures */}
         <OfflineQueueBanner />
+
+        {/* Pending approvals banner */}
+        {pendingApprovals.length > 0 && (
+          <View style={styles.pendingBanner} testID="pending-approval-banner">
+            <H3>Needs your review</H3>
+            <Caption color={Colors.textSecondary} style={{ marginBottom: Spacing.sm }}>
+              Your care partner logged {pendingApprovals.length === 1 ? 'a visit' : 'visits'} for you. Review before they are saved.
+            </Caption>
+            {pendingApprovals.map(summary => (
+              <TouchableOpacity
+                key={`pending-${summary.id}`}
+                style={styles.pendingCard}
+                onPress={() => handleOpenSummary(summary)}
+              >
+                <View style={styles.pendingCardContent}>
+                  <Body style={{ fontWeight: '600' }}>Review {format(new Date(summary.createdAt), 'MMM d, yyyy')}</Body>
+                  <Caption color={Colors.warning}>Captured by {summary.submitterName ?? 'Care Partner'}</Caption>
+                </View>
+                <Text style={styles.chevron}>›</Text>
+              </TouchableOpacity>
+            ))}
+            <Divider style={{ marginTop: Spacing.lg, marginBottom: Spacing.lg }} />
+          </View>
+        )}
 
         {/* Past summaries */}
         <View style={styles.sectionHeader}>
@@ -283,6 +308,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: Spacing.md,
     marginTop: Spacing.sm,
+  },
+
+  // Pending Approvals
+  pendingBanner: {
+    marginBottom: Spacing.xl,
+  },
+  pendingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.warningLight,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    marginTop: Spacing.xs,
+    marginBottom: Spacing.xs,
+  },
+  pendingCardContent: {
+    flex: 1,
   },
 
   // Summary cards

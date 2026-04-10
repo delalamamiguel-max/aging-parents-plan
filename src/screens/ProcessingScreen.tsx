@@ -19,6 +19,7 @@ import {
   StatusBar,
   Animated,
   Easing,
+  Alert,
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -155,19 +156,29 @@ export default function ProcessingScreen({ navigation, route }: Props) {
         if (cancelled) return;
         console.log(`[ProcessingScreen] LLM complete. Sections: ${result.sections.filter(s => !s.isEmpty).length} filled`);
 
+        const isAssisted = state.currentRole === 'adult_child';
+
         dispatch({
           type: 'UPDATE_SUMMARY',
           summaryId: visitId,
           updates: {
-            status: 'ready_for_review',
+            status: isAssisted ? 'pending_parent_approval' : 'ready_for_review',
             sections: result.sections,
             actionItems: result.actionItems,
             flags: result.flags,
           },
         });
 
-        dispatch({ type: 'SET_ACTIVE_SUMMARY', summaryId: visitId });
-        navigation.replace('SummaryReview', { summaryId: visitId });
+        if (isAssisted) {
+           Alert.alert(
+               'Sent for review',
+               'Your parent needs to review and approve this summary before it is permanently saved.',
+               [{ text: 'OK', onPress: () => navigation.navigate('AdultChildHome') }]
+           );
+        } else {
+           dispatch({ type: 'SET_ACTIVE_SUMMARY', summaryId: visitId });
+           navigation.replace('SummaryReview', { summaryId: visitId });
+        }
       } catch (err) {
         if (cancelled) return;
         console.error('[ProcessingScreen] Pipeline failed:', err);

@@ -158,6 +158,47 @@ export default function SummaryReviewScreen({ navigation, route }: Props) {
     );
   };
 
+  // ─── Approval Mechanics (Assisted Capture) ─────────────────────────────────
+
+  const isPendingApproval = summary.status === 'pending_parent_approval' && summary.approvalStatus === 'pending';
+
+  const handleApprove = () => {
+    dispatch({
+      type: 'UPDATE_SUMMARY',
+      summaryId,
+      updates: {
+        status: 'draft',
+        approvalStatus: 'approved',
+      },
+    });
+    Alert.alert('Approved', 'You can now edit any details, set reminders, or save this visit.', [{ text: 'OK' }]);
+  };
+
+  const handleReject = () => {
+    Alert.alert(
+      'Reject this summary?',
+      'It will be marked as rejected and removed from your active review queue.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Reject', 
+          style: 'destructive',
+          onPress: () => {
+            dispatch({
+              type: 'UPDATE_SUMMARY',
+              summaryId,
+              updates: {
+                status: 'rejected',
+                approvalStatus: 'rejected',
+              },
+            });
+            navigation.navigate('ParentHome');
+          }
+        }
+      ]
+    );
+  };
+
   // ─── Proceed to reminder setup ─────────────────────────────────────────────
 
   const proceedToReminders = () => {
@@ -301,12 +342,15 @@ export default function SummaryReviewScreen({ navigation, route }: Props) {
               ) : (
                 <TouchableOpacity
                   testID={`tap-to-edit-${sectionType}`}
-                  onPress={() => startEditing(section)}
-                  style={styles.sectionContent}
-                  activeOpacity={0.82}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Edit: ${SECTION_LABELS[sectionType]}`}
-                  accessibilityHint="Tap to edit this section"
+                  onPress={() => {
+                     // Block taps if it's pending review
+                     if (!isPendingApproval) startEditing(section);
+                  }}
+                  style={[styles.sectionContent, isPendingApproval && { opacity: 0.8 }]}
+                  activeOpacity={isPendingApproval ? 1 : 0.82}
+                  accessibilityRole={isPendingApproval ? 'none' : 'button'}
+                  accessibilityLabel={isPendingApproval ? undefined : `Edit: ${SECTION_LABELS[sectionType]}`}
+                  accessibilityHint={isPendingApproval ? undefined : "Tap to edit this section"}
                 >
                   <Body
                     style={([
@@ -317,9 +361,11 @@ export default function SummaryReviewScreen({ navigation, route }: Props) {
                   >
                     {section.content}
                   </Body>
-                  <Caption color={Colors.primary} style={styles.tapToEdit}>
-                    Tap to edit
-                  </Caption>
+                  {!isPendingApproval && (
+                     <Caption color={Colors.primary} style={styles.tapToEdit}>
+                       Tap to edit
+                     </Caption>
+                  )}
                 </TouchableOpacity>
               )}
 
@@ -338,33 +384,57 @@ export default function SummaryReviewScreen({ navigation, route }: Props) {
         )}
 
         {/* Regeneration option (one-time) */}
-        <TouchableOpacity
-          testID="btn-regenerate"
-          style={styles.regenerateRow}
-          onPress={handleRegenerate}
-          activeOpacity={0.75}
-        >
-          <Caption color={hasRegenerated ? Colors.textSecondary : Colors.primary} style={{ fontWeight: '600' }}>
-            {hasRegenerated ? 'Already regenerated — edit fields directly' : 'Something look wrong? Regenerate with a correction'}
-          </Caption>
-        </TouchableOpacity>
+        {!isPendingApproval && (
+          <TouchableOpacity
+            testID="btn-regenerate"
+            style={styles.regenerateRow}
+            onPress={handleRegenerate}
+            activeOpacity={0.75}
+          >
+            <Caption color={hasRegenerated ? Colors.textSecondary : Colors.primary} style={{ fontWeight: '600' }}>
+              {hasRegenerated ? 'Already regenerated — edit fields directly' : 'Something look wrong? Regenerate with a correction'}
+            </Caption>
+          </TouchableOpacity>
+        )}
 
         {/* Actions */}
         <View style={styles.actions}>
-          <Button
-            testID="btn-set-reminders"
-            label="Set reminders & continue"
-            onPress={proceedToReminders}
-            isLoading={isSaving}
-            style={styles.primaryAction}
-          />
-          <Button
-            testID="btn-save-private"
-            label="Save privately — no reminders yet"
-            variant="secondary"
-            onPress={savePrivate}
-            isLoading={isSaving}
-          />
+          {isPendingApproval ? (
+            <Card style={styles.approvalCard}>
+               <Body style={{ fontWeight: '600', marginBottom: Spacing.sm, textAlign: 'center' }}>
+                 Do you approve this summary?
+               </Body>
+               <Button
+                 testID="btn-approve"
+                 label="Approve to edit & save"
+                 onPress={handleApprove}
+               />
+               <Button
+                 testID="btn-reject"
+                 label="Reject"
+                 variant="destructive"
+                 onPress={handleReject}
+                 style={{ marginTop: Spacing.sm }}
+               />
+            </Card>
+          ) : (
+            <>
+              <Button
+                testID="btn-set-reminders"
+                label="Set reminders & continue"
+                onPress={proceedToReminders}
+                isLoading={isSaving}
+                style={styles.primaryAction}
+              />
+              <Button
+                testID="btn-save-private"
+                label="Save privately — no reminders yet"
+                variant="secondary"
+                onPress={savePrivate}
+                isLoading={isSaving}
+              />
+            </>
+          )}
         </View>
       </ScrollView>
 
@@ -609,6 +679,12 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     minHeight: 100,
     lineHeight: Typography.lineHeight.body,
+  },
+  approvalCard: {
+    backgroundColor: Colors.warningLight,
+    borderColor: Colors.warning,
+    borderWidth: 1,
+    padding: Spacing.lg,
   },
   errorState: {
     flex: 1,
