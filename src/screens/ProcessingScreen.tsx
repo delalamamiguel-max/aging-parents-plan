@@ -27,6 +27,7 @@ import { H2, Body, Caption, Button } from '../components/ui';
 import { useAppState } from '../state/AppContext';
 import { generateSummaryFromInput } from '../services/summaryService';
 import { transcribeAudio, TranscriptionError, TRANSCRIPTION_ERROR_MESSAGES } from '../services/transcriptionService';
+import { isTranscriptionConfigured, getAIConfigSummary } from '../config/env';
 import { RootStackParamList } from '../navigation/types';
 import { SECTION_ORDER } from '../contracts/schema';
 
@@ -61,6 +62,8 @@ export default function ProcessingScreen({ navigation, route }: Props) {
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isDelayed, setIsDelayed] = useState(false);
+  // retryCount drives re-execution of runPipeline on retry
+  const [retryCount, setRetryCount] = useState(0);
 
   // Pick correct message list based on capture type
   const isVoiceCapture = captureInput.inputType === 'voice';
@@ -114,29 +117,43 @@ export default function ProcessingScreen({ navigation, route }: Props) {
   useEffect(() => {
     let cancelled = false;
 
+    // Log config on every attempt so failures are traceable in the console
+    console.log(`[ProcessingScreen] Starting pipeline. Config: ${getAIConfigSummary()}`);
+
+    // Reset phase index on retry
+    setPhaseIndex(0);
+
     async function runPipeline() {
       try {
         let rawText = captureInput.rawText ?? '';
 
         // Step 1: Transcription (voice captures only)
         if (captureInput.inputType === 'voice' && captureInput.rawUri) {
-          // Phase index 0 = "Listening to your recording…"
+          if (!isTranscriptionConfigured()) {
+            throw new TranscriptionError(
+              'Transcription is not configured. Add WHISPER_LOCAL_URL or OPENAI_API_KEY to your .env file.',
+              'auth'
+            );
+          }
           const transcript = await transcribeAudio(
             captureInput.rawUri,
             (captureInput.language as 'en' | 'es') ?? 'en'
           );
           if (cancelled) return;
           rawText = transcript;
-          setPhaseIndex(1); // advance to LLM phases
+          console.log(`[ProcessingScreen] Transcription complete. Length: ${rawText.length} chars`);
+          setPhaseIndex(1);
         }
 
         // Step 2: LLM summarisation
+        console.log('[ProcessingScreen] Calling LLM...');
         const result = await generateSummaryFromInput(visitId, {
           rawText,
           language: (captureInput.language as 'en' | 'es') ?? 'en',
         });
 
         if (cancelled) return;
+        console.log(`[ProcessingScreen] LLM complete. Sections: ${result.sections.filter(s => !s.isEmpty).length} filled`);
 
         dispatch({
           type: 'UPDATE_SUMMARY',
@@ -153,12 +170,12 @@ export default function ProcessingScreen({ navigation, route }: Props) {
         navigation.replace('SummaryReview', { summaryId: visitId });
       } catch (err) {
         if (cancelled) return;
+        console.error('[ProcessingScreen] Pipeline failed:', err);
 
-        // Transcription errors get specific user messages
         if (err instanceof TranscriptionError) {
           setErrorMessage(TRANSCRIPTION_ERROR_MESSAGES[err.code]);
         } else {
-          setErrorMessage(null); // generic message shown in UI
+          setErrorMessage(null);
         }
         setHasError(true);
       }
@@ -166,7 +183,7 @@ export default function ProcessingScreen({ navigation, route }: Props) {
 
     runPipeline();
     return () => { cancelled = true; };
-  }, [visitId, captureInput, dispatch, navigation]);
+  }, [visitId, captureInput, dispatch, navigation, retryCount]);
 
   // Error state
   if (hasError) {
@@ -185,6 +202,8 @@ export default function ProcessingScreen({ navigation, route }: Props) {
             onPress={() => {
               setHasError(false);
               setErrorMessage(null);
+              setIsDelayed(false);
+              setRetryCount(c => c + 1); // triggers runPipeline useEffect
             }}
             style={{ marginTop: Spacing.lg }}
           />

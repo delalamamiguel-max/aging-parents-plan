@@ -25,7 +25,7 @@ import { callLLM, LLMError } from './llmClient';
 import { SUMMARY_SYSTEM_PROMPT, buildUserPrompt, buildCorrectionPrompt } from './promptTemplates';
 import { parseLLMResponse, validateLLMOutput, RawActionItem, RawFlag } from './outputValidator';
 import { applyReadabilityToSections } from './readabilityGuard';
-import { isAIConfigured } from '../config/env';
+import { isAIConfigured, getAIConfigSummary } from '../config/env';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -63,9 +63,11 @@ export async function generateSummaryFromInput(
 
   // Guard: LLM not configured
   if (!isAIConfigured()) {
-    console.warn('[summaryService] LLM not configured — falling back to stub');
+    console.warn('[summaryService] LLM not configured — falling back to stub. Config:', getAIConfigSummary());
     return buildStubFallback(visitId, rawContent, generatedAt);
   }
+
+  console.log('[summaryService] Generating. Config:', getAIConfigSummary());
 
   try {
     const userPrompt = buildUserPrompt({ rawText: rawContent, visitDate, language });
