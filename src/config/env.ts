@@ -25,10 +25,12 @@ export const ENV = {
     ''
   ),
   /**
-   * When true, summarisation/transcription should use the backend HTTP API once wired.
-   * Legacy client-side LLM/Whisper paths remain when false (default).
+   * When true, try the Node backend (`src/api/*`) first for summarise/transcribe; on failure, legacy client providers.
+   * Alias: `EXPO_PUBLIC_FEATURE_BACKEND_AI` (deprecated) — if set without `USE_BACKEND_PIPELINE`, it still applies.
    */
-  FEATURE_BACKEND_AI: (process.env.EXPO_PUBLIC_FEATURE_BACKEND_AI ?? '0').trim() === '1',
+  USE_BACKEND_PIPELINE: parseBackendFlag(
+    process.env.EXPO_PUBLIC_USE_BACKEND_PIPELINE ?? process.env.EXPO_PUBLIC_FEATURE_BACKEND_AI
+  ),
 
   // ── Legacy: direct client-side providers (still supported) ──────────────────
   // Do not use production secrets here — values are visible in the bundle (ADR-002).
@@ -43,26 +45,49 @@ export const ENV = {
   WHISPER_MODEL: process.env.EXPO_PUBLIC_WHISPER_MODEL ?? 'base',
 } as const;
 
+function parseBackendFlag(raw: string | undefined): boolean {
+  if (raw === undefined || raw === '') return false;
+  const v = raw.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
+/** @deprecated Use ENV.USE_BACKEND_PIPELINE */
+export function featureBackendAiEnabled(): boolean {
+  return ENV.USE_BACKEND_PIPELINE;
+}
+
 // ─── Capability guards ────────────────────────────────────────────────────────
 
-/** True if the LLM summarisation pipeline is ready */
-export function isAIConfigured(): boolean {
+/** Legacy client-side LLM (Gemini/Ollama in-app) — not the Node backend. */
+export function isLegacyClientLLMConfigured(): boolean {
   if (ENV.LLM_PROVIDER === 'gemini') return ENV.GEMINI_API_KEY.length > 0;
   if (ENV.LLM_PROVIDER === 'ollama') return ENV.OLLAMA_BASE_URL.length > 0 && ENV.OLLAMA_MODEL.length > 0;
   return false;
 }
 
-/** True if the transcription pipeline is ready */
-export function isTranscriptionConfigured(): boolean {
+/** Legacy Whisper path (local server or OpenAI from the app). */
+export function isLegacyClientTranscriptionConfigured(): boolean {
   if (ENV.WHISPER_PROVIDER === 'local') return ENV.WHISPER_LOCAL_URL.length > 0;
   if (ENV.WHISPER_PROVIDER === 'openai') return ENV.OPENAI_API_KEY.length > 0;
   return false;
 }
 
+/** True if summarisation can run via backend and/or legacy client LLM */
+export function isAIConfigured(): boolean {
+  if (ENV.USE_BACKEND_PIPELINE && ENV.BACKEND_API_BASE.length > 0) return true;
+  return isLegacyClientLLMConfigured();
+}
+
+/** True if transcription can run via backend and/or legacy client Whisper */
+export function isTranscriptionConfigured(): boolean {
+  if (ENV.USE_BACKEND_PIPELINE && ENV.BACKEND_API_BASE.length > 0) return true;
+  return isLegacyClientTranscriptionConfigured();
+}
+
 /** Returns a human-readable summary of the current AI config — for logging only */
 export function getAIConfigSummary(): string {
   return [
-    `Backend: ${ENV.BACKEND_API_BASE} | FEATURE_BACKEND_AI=${ENV.FEATURE_BACKEND_AI}`,
+    `Backend: ${ENV.BACKEND_API_BASE} | USE_BACKEND_PIPELINE=${ENV.USE_BACKEND_PIPELINE}`,
     `LLM: ${ENV.LLM_PROVIDER}${
       ENV.LLM_PROVIDER === 'ollama'
         ? ` (${ENV.OLLAMA_MODEL} @ ${ENV.OLLAMA_BASE_URL})`

@@ -63,9 +63,18 @@ async function runLaunchGateEval() {
         });
       }
 
-      if (result._validationWarnings && result._validationWarnings.length > 0) {
-        console.log(`🚧 Validation warnings: ${result._validationWarnings.length}`);
-        result._validationWarnings.forEach(w => console.log(`   - ${w}`));
+      const vw = result._validationWarnings ?? [];
+      if (vw.length > 0) {
+        console.log(`🚧 Validator / readability lines: ${vw.length}`);
+        vw.forEach((w) => {
+          const isReadability = w.startsWith('readability_');
+          const tag = isReadability ? '[READ]' : '[WARN]';
+          console.log(`   ${tag} ${w}`);
+        });
+      }
+
+      if (result.pipelineOutcome) {
+        console.log(`📋 Pipeline outcome: ${result.pipelineOutcome}`);
       }
 
       // Very rudimentary pass check

@@ -17,6 +17,7 @@ import {
   uploadAsync,
   FileSystemUploadType,
 } from 'expo-file-system/legacy';
+import { transcribeViaBackend, isApiClientError } from '../api/client';
 import { ENV } from '../config/env';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -69,16 +70,32 @@ export async function transcribeAudio(
   audioUri: string,
   language: 'en' | 'es' = 'en'
 ): Promise<string> {
+  if (ENV.USE_BACKEND_PIPELINE && ENV.BACKEND_API_BASE.length > 0) {
+    try {
+      const { result } = await transcribeViaBackend({ language });
+      // Backend currently uses a JSON stub (no multipart audio yet). Prefer legacy for real files when needed.
+      return result.transcript;
+    } catch (e) {
+      if (isApiClientError(e)) {
+        console.warn(
+          `[transcriptionService] Backend transcribe failed (${e.code}), using legacy path. requestId=${e.requestId ?? 'n/a'}`
+        );
+      } else {
+        console.warn('[transcriptionService] Backend transcribe threw, using legacy path:', e);
+      }
+    }
+  }
+
   if (ENV.WHISPER_PROVIDER === 'local') {
     return transcribeLocal(audioUri, language);
-  } else if (ENV.WHISPER_PROVIDER === 'openai') {
-    return transcribeOpenAI(audioUri, language);
-  } else {
-    throw new TranscriptionError(
-      `Unknown WHISPER_PROVIDER: ${ENV.WHISPER_PROVIDER}`,
-      'server_error'
-    );
   }
+  if (ENV.WHISPER_PROVIDER === 'openai') {
+    return transcribeOpenAI(audioUri, language);
+  }
+  throw new TranscriptionError(
+    `Unknown WHISPER_PROVIDER: ${ENV.WHISPER_PROVIDER}`,
+    'server_error'
+  );
 }
 
 // ─── Local Whisper server ─────────────────────────────────────────────────────
