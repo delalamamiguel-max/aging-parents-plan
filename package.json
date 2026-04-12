@@ -9,7 +9,10 @@
     "web": "expo start --web",
     "test": "jest",
     "test:ci": "jest --ci --coverage --maxWorkers=2",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "backend:dev": "npm run dev --prefix backend",
+    "backend:start": "npm run start --prefix backend",
+    "backend:build": "npm run build --prefix backend"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",

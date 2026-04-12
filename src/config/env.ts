@@ -6,25 +6,37 @@
  * - .env is in .gitignore
  * - All consumers import from this file, not process.env directly
  *
+ * Preferred (client-safe): public backend URL + feature flags only.
+ * Legacy: direct LLM/Whisper env vars remain supported until all calls go through the backend.
+ *
  * Setup:
  * 1. Copy .env.example to .env
- * 2. Fill in your keys / provider choices
+ * 2. Set EXPO_PUBLIC_BACKEND_API_BASE for the Node backend (device: use host LAN IP)
  * 3. Restart the Expo server (Ctrl-C then `npx expo start`)
  */
 
 // Expo exposes env vars prefixed with EXPO_PUBLIC_ to the client bundle.
 
 export const ENV = {
-  // ── LLM (Gemma 3 via Ollama locally, or Gemini cloud) ──────────────────────
+  // ── Preferred: client-safe (public backend + flags) ─────────────────────────
+  /** HTTP origin of the Node backend (no path, no trailing slash). */
+  BACKEND_API_BASE: (process.env.EXPO_PUBLIC_BACKEND_API_BASE ?? 'http://127.0.0.1:8787').replace(
+    /\/$/,
+    ''
+  ),
+  /**
+   * When true, summarisation/transcription should use the backend HTTP API once wired.
+   * Legacy client-side LLM/Whisper paths remain when false (default).
+   */
+  FEATURE_BACKEND_AI: (process.env.EXPO_PUBLIC_FEATURE_BACKEND_AI ?? '0').trim() === '1',
+
+  // ── Legacy: direct client-side providers (still supported) ──────────────────
+  // Do not use production secrets here — values are visible in the bundle (ADR-002).
   GEMINI_API_KEY: process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
-  // Default to 'ollama' — the user's local setup uses Gemma 3 via Ollama.
-  // On a physical device, OLLAMA_BASE_URL must be the Mac's LAN IP, not localhost.
   LLM_PROVIDER: (process.env.EXPO_PUBLIC_LLM_PROVIDER ?? 'ollama') as 'gemini' | 'ollama',
   OLLAMA_BASE_URL: process.env.EXPO_PUBLIC_OLLAMA_BASE_URL ?? 'http://localhost:11434',
   OLLAMA_MODEL: process.env.EXPO_PUBLIC_OLLAMA_MODEL ?? 'gemma3:4b',
 
-  // ── Transcription (Whisper local server, or OpenAI Whisper API) ──────────
-  // On a physical device, WHISPER_LOCAL_URL must be the Mac's LAN IP, not localhost.
   WHISPER_PROVIDER: (process.env.EXPO_PUBLIC_WHISPER_PROVIDER ?? 'local') as 'local' | 'openai',
   WHISPER_LOCAL_URL: process.env.EXPO_PUBLIC_WHISPER_LOCAL_URL ?? 'http://localhost:9000',
   OPENAI_API_KEY: process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '',
@@ -50,6 +62,7 @@ export function isTranscriptionConfigured(): boolean {
 /** Returns a human-readable summary of the current AI config — for logging only */
 export function getAIConfigSummary(): string {
   return [
+    `Backend: ${ENV.BACKEND_API_BASE} | FEATURE_BACKEND_AI=${ENV.FEATURE_BACKEND_AI}`,
     `LLM: ${ENV.LLM_PROVIDER}${
       ENV.LLM_PROVIDER === 'ollama'
         ? ` (${ENV.OLLAMA_MODEL} @ ${ENV.OLLAMA_BASE_URL})`
