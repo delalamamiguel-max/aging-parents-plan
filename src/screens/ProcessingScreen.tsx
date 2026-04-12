@@ -30,8 +30,16 @@ import { generateSummaryFromInput } from '../services/summaryService';
 import { transcribeAudio, TranscriptionError, TRANSCRIPTION_ERROR_MESSAGES } from '../services/transcriptionService';
 import { isTranscriptionConfigured, getAIConfigSummary } from '../config/env';
 import { RootStackParamList } from '../navigation/types';
-import { SECTION_ORDER, CaptureInputType } from '../contracts/schema';
+import { SECTION_ORDER, CaptureInputType, ProcessingOutcome } from '../contracts/schema';
 import { analytics } from '../services/analyticsService';
+
+interface OutcomeDetail {
+  title: string;
+  message: string;
+  emoji?: string;
+  primaryAction?: { label: string; onPress: () => void };
+  secondaryAction?: { label: string; onPress: () => void };
+}
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Processing'>;
@@ -61,8 +69,8 @@ export default function ProcessingScreen({ navigation, route }: Props) {
   const { state, dispatch } = useAppState();
 
   const [phaseIndex, setPhaseIndex] = useState(0);
-  const [hasError, setHasError] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<ProcessingOutcome>('processing');
+  const [outcomeDetail, setOutcomeDetail] = useState<OutcomeDetail | null>(null);
   const [isDelayed, setIsDelayed] = useState(false);
   // retryCount drives re-execution of runPipeline on retry
   const [retryCount, setRetryCount] = useState(0);
@@ -126,10 +134,23 @@ export default function ProcessingScreen({ navigation, route }: Props) {
     setPhaseIndex(0);
 
     async function runPipeline() {
+      const requestId = analytics.startNewRequest();
+      const startTime = Date.now();
+      let transcriptionDurationMs = 0;
+      let generationDurationMs = 0;
+
+      analytics.trackPipelineStarted({
+        inputType: captureInput.inputType as CaptureInputType,
+        isOffline: captureInput.isOffline,
+        language: (captureInput.language as 'en' | 'es') ?? 'en',
+        retryCount,
+        role: state.currentRole as 'parent' | 'adult_child',
+      });
+
       try {
         let rawText = captureInput.rawText ?? '';
 
-        // Step 1: Transcription (voice captures only)
+        // ─── Step 1: Transcription (voice captures only) ───
         if (captureInput.inputType === 'voice' && captureInput.rawUri) {
           if (!isTranscriptionConfigured()) {
             throw new TranscriptionError(
@@ -143,11 +164,13 @@ export default function ProcessingScreen({ navigation, route }: Props) {
           );
           if (cancelled) return;
           rawText = transcript;
+          transcriptionDurationMs = Date.now() - startTime;
           console.log(`[ProcessingScreen] Transcription complete. Length: ${rawText.length} chars`);
           setPhaseIndex(1);
         }
 
-        // Step 2: LLM summarisation
+        // ─── Step 2: LLM summarisation ───
+        const generationStartTime = Date.now();
         console.log('[ProcessingScreen] Calling LLM...');
         const result = await generateSummaryFromInput(visitId, {
           rawText,
@@ -155,10 +178,59 @@ export default function ProcessingScreen({ navigation, route }: Props) {
         });
 
         if (cancelled) return;
+        generationDurationMs = Date.now() - generationStartTime;
         console.log(`[ProcessingScreen] LLM complete. Sections: ${result.sections.filter(s => !s.isEmpty).length} filled`);
 
-        const durationSecs = Math.floor((Date.now() - new Date(captureInput.capturedAt).getTime()) / 1000);
-        analytics.trackCaptureCompleted(durationSecs, captureInput.inputType as CaptureInputType, captureInput.isOffline);
+        // Check for fallback/stub
+        const isFallback = result.sections.every(s => s.isEmpty);
+          if (captureInput.isOffline) {
+            dispatch({ type: 'CANCEL_OFFLINE_PROCESSING' });
+            dispatch({ 
+              type: 'UPDATE_OFFLINE_CAPTURE', 
+              captureId: captureInput.id, 
+              updates: { lastOutcome: 'fallback_used' } 
+            });
+          }
+
+          setOutcome('fallback_used');
+          setOutcomeDetail({
+            title: 'Note captured, but summary failed',
+            message: "We've saved your recording, but our AI couldn't generate a summary right now. You can review the raw text yourself.",
+            emoji: '📝',
+            primaryAction: {
+              label: 'Review Raw Text',
+              onPress: () => {
+                dispatch({ type: 'SET_ACTIVE_SUMMARY', summaryId: visitId });
+                navigation.replace('SummaryReview', { summaryId: visitId });
+              }
+            },
+            }
+          });
+
+          analytics.trackPipelineCompleted({
+            durationMs: Date.now() - startTime,
+            transcriptionDurationMs: transcriptionDurationMs || undefined,
+            generationDurationMs,
+            outcome: 'fallback_used',
+            sectionCount: result.sections.length,
+            actionItemCount: result.actionItems.length,
+            flagCount: result.flags.length,
+            role: state.currentRole as 'parent' | 'adult_child',
+          });
+
+          return;
+
+        const durationMs = Date.now() - startTime;
+        analytics.trackPipelineCompleted({
+          durationMs,
+          transcriptionDurationMs: transcriptionDurationMs || undefined,
+          generationDurationMs,
+          outcome: 'success',
+          sectionCount: result.sections.length,
+          actionItemCount: result.actionItems.length,
+          flagCount: result.flags.length,
+          role: state.currentRole as 'parent' | 'adult_child',
+        });
 
         const isAssisted = state.currentRole === 'adult_child';
 
@@ -170,12 +242,15 @@ export default function ProcessingScreen({ navigation, route }: Props) {
             sections: result.sections,
             actionItems: result.actionItems,
             flags: result.flags,
+            lastOutcome: isFallback ? 'fallback_used' : 'success',
           },
         });
 
         if (captureInput.isOffline) {
           dispatch({ type: 'DEQUEUE_OFFLINE_CAPTURE', captureId: captureInput.id });
         }
+
+        setOutcome('success');
 
         if (isAssisted) {
            Alert.alert(
@@ -191,17 +266,54 @@ export default function ProcessingScreen({ navigation, route }: Props) {
         if (cancelled) return;
         console.error('[ProcessingScreen] Pipeline failed:', err);
 
+        let category: ProcessingOutcome = 'retryable_failure';
+        let title = 'Something went wrong';
+        let detail = "We couldn't finish that summary yet. Your recording is safe. Try again when you're connected.";
+        let emoji = '🔌';
+
         if (err instanceof TranscriptionError) {
-          setErrorMessage(TRANSCRIPTION_ERROR_MESSAGES[err.code]);
-          analytics.trackCaptureFailed(`transcription_error_${err.code}`, captureInput.inputType as CaptureInputType);
+          analytics.trackPipelineFailed({
+            errorType: 'transcription_error',
+            errorCode: err.code,
+            errorPhase: 'transcription',
+            retryCount,
+            role: state.currentRole as 'parent' | 'adult_child',
+          });
+          detail = TRANSCRIPTION_ERROR_MESSAGES[err.code];
+          
+          if (err.code === 'auth') {
+            category = 'non_retryable_failure';
+            title = 'Setup Required';
+            emoji = '⚙️';
+          } else if (err.code === 'format_error') {
+            category = 'non_retryable_failure';
+            title = 'Recording Error';
+            emoji = '⚠️';
+          } else if (err.code === 'no_speech') {
+            category = 'non_retryable_failure';
+            title = 'Nothing Heard';
+            emoji = '🔇';
+          }
         } else {
-          setErrorMessage(null);
-          analytics.trackCaptureFailed('llm_generation_error', captureInput.inputType as CaptureInputType);
+          analytics.trackPipelineFailed({
+            errorType: 'llm_generation_error',
+            errorPhase: 'generation',
+            retryCount,
+            role: state.currentRole as 'parent' | 'adult_child',
+          });
         }
+
         if (captureInput.isOffline) {
           dispatch({ type: 'CANCEL_OFFLINE_PROCESSING' });
+          dispatch({ 
+            type: 'UPDATE_OFFLINE_CAPTURE', 
+            captureId: captureInput.id, 
+            updates: { lastOutcome: category } 
+          });
         }
-        setHasError(true);
+
+        setOutcome(category);
+        setOutcomeDetail({ title, message: detail, emoji });
       }
     }
 
@@ -209,35 +321,59 @@ export default function ProcessingScreen({ navigation, route }: Props) {
     return () => { cancelled = true; };
   }, [visitId, captureInput, dispatch, navigation, retryCount]);
 
-  // Error state
-  if (hasError) {
+  // Error/Fallback state
+  if (outcome !== 'processing' && outcome !== 'success') {
+    const detail = outcomeDetail;
+    const isRetryable = outcome === 'retryable_failure';
+
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar barStyle="dark-content" backgroundColor={Colors.surface} />
-        <View style={styles.errorContainer} testID="processing-error">
-          <Text style={styles.errorEmoji}>🔌</Text>
-          <H2 style={styles.errorTitle}>Something went wrong</H2>
+        <View style={styles.errorContainer} testID="processing-outcome-screen">
+          <Text style={styles.errorEmoji}>{detail?.emoji ?? '🔌'}</Text>
+          <H2 style={styles.errorTitle}>{detail?.title ?? 'Something went wrong'}</H2>
           <Body color={Colors.textSecondary} style={styles.errorBody}>
-            {errorMessage ?? "We couldn't finish that summary yet. Your recording is safe. Try again when you're connected."}
+            {detail?.message ?? "We couldn't finish that summary yet. Your recording is safe. Try again when you're connected."}
           </Body>
-          <Button
-            testID="btn-retry"
-            label="Try again"
-            onPress={() => {
-              setHasError(false);
-              setErrorMessage(null);
-              setIsDelayed(false);
-              setRetryCount(c => c + 1); // triggers runPipeline useEffect
-            }}
-            style={{ marginTop: Spacing.lg }}
-          />
-          <Button
-            testID="btn-go-home"
-            label="Go home — I'll finish later"
-            variant="ghost"
-            onPress={() => navigation.navigate('ParentHome')}
-            style={{ marginTop: Spacing.sm }}
-          />
+
+          {detail?.primaryAction ? (
+            <Button
+              testID="btn-outcome-primary"
+              label={detail.primaryAction.label}
+              onPress={detail.primaryAction.onPress}
+              style={{ marginTop: Spacing.lg }}
+            />
+          ) : isRetryable ? (
+            <Button
+              testID="btn-retry"
+              label="Try again"
+              onPress={() => {
+                setOutcome('processing');
+                setOutcomeDetail(null);
+                setIsDelayed(false);
+                setRetryCount(c => c + 1);
+              }}
+              style={{ marginTop: Spacing.lg }}
+            />
+          ) : null}
+
+          {detail?.secondaryAction ? (
+            <Button
+              testID="btn-outcome-secondary"
+              label={detail.secondaryAction.label}
+              variant="ghost"
+              onPress={detail.secondaryAction.onPress}
+              style={{ marginTop: Spacing.sm }}
+            />
+          ) : (
+            <Button
+              testID="btn-go-home"
+              label="Go home — I'll finish later"
+              variant="ghost"
+              onPress={() => navigation.navigate(state.currentRole === 'adult_child' ? 'AdultChildHome' : 'ParentHome')}
+              style={{ marginTop: Spacing.sm }}
+            />
+          )}
         </View>
       </SafeAreaView>
     );

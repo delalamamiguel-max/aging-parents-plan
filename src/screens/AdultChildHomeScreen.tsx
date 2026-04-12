@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Colors, Spacing, Radius, Typography, Shadow } from '../design/tokens';
-import { H1, H3, Body, Caption, MicroLabel, EmptyState, Divider } from '../components/ui';
+import { OfflineQueueBanner } from '../components/ui/OfflineQueueBanner';
 import { useAppState } from '../state/AppContext';
 import { VisitSummary, ActionItem } from '../contracts/schema';
 import { RootStackParamList } from '../navigation/types';
@@ -91,6 +91,8 @@ export default function AdultChildHomeScreen({ navigation }: Props) {
           </View>
         </TouchableOpacity>
 
+        <OfflineQueueBanner />
+
         {/* Tasks View */}
         <TouchableOpacity
           style={styles.tasksBanner}
@@ -154,6 +156,13 @@ export default function AdultChildHomeScreen({ navigation }: Props) {
                     Read-only
                   </Caption>
                 </View>
+                {summary.lastOutcome === 'fallback_used' && (
+                  <View style={[styles.statusPill, { borderColor: Colors.fallback, marginLeft: Spacing.xs }]}>
+                    <Caption color={Colors.fallback} style={{ fontWeight: '600' }}>
+                      Partial ✦
+                    </Caption>
+                  </View>
+                )}
               </View>
 
               {summary.flags.length > 0 && (

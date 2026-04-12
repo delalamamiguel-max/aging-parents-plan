@@ -19,6 +19,8 @@ export function OfflineQueueBanner() {
     (c) => c.id !== state.currentlyProcessingQueueId
   );
   const queueLength = visibleQueue.length;
+  const hasFailedItems = visibleQueue.some(c => c.lastOutcome && c.lastOutcome !== 'success');
+  const hasFallbacks = visibleQueue.some(c => c.lastOutcome === 'fallback_used');
 
   // Poll network status to know if we can flush
   useEffect(() => {
@@ -62,14 +64,16 @@ export function OfflineQueueBanner() {
   return (
     <View style={styles.container}>
       <View style={styles.content}>
-        <Text style={styles.icon}>{isOnline ? '⏳' : '📡'}</Text>
+        <Text style={styles.icon}>{hasFailedItems ? '⚠️' : isOnline ? '⏳' : '📡'}</Text>
         <View style={styles.textStack}>
           <Caption color={Colors.textPrimary} style={styles.title}>
             {queueLength} {queueLength === 1 ? 'visit' : 'visits'} waiting to process
           </Caption>
           <Caption color={Colors.textSecondary}>
             {isOnline
-              ? 'You are back online. Tap to generate.'
+              ? hasFailedItems
+                ? 'Retry needed for some items. Tap to generate.'
+                : 'You are back online. Tap to generate.'
               : 'You are offline. We will save these safely until you reconnect.'}
           </Caption>
         </View>

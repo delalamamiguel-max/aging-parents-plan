@@ -190,6 +190,13 @@ export default function ParentHomeScreen({ navigation }: Props) {
                     {statusLabel[summary.status]}
                   </Caption>
                 </View>
+                {summary.lastOutcome === 'fallback_used' && (
+                  <View style={[styles.statusPill, { borderColor: Colors.fallback, marginLeft: Spacing.xs }]}>
+                    <Caption color={Colors.fallback} style={{ fontWeight: '600' }}>
+                      Partial ✦
+                    </Caption>
+                  </View>
+                )}
               </View>
 
               {summary.status === 'pending_parent_approval' && (

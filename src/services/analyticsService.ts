@@ -6,63 +6,112 @@
  * Only boolean flags, enums, counts, and duration metrics.
  */
 
-import { CaptureInputType, SubmitterType } from '../contracts/schema';
-
-// List of allowed events to prevent typos and enforce taxonomy
-type AppEvent =
-  | 'app_opened'
-  | 'capture_started'
-  | 'capture_completed'
-  | 'capture_failed'
-  | 'summary_saved_private'
-  | 'summary_shared'
-  | 'summary_approved'
-  | 'summary_rejected'
-  | 'reminder_scheduled';
-
-interface EventPayload {
-  [key: string]: string | number | boolean;
-}
+import { CaptureInputType, SubmitterType, ProcessingOutcome } from '../contracts/schema';
+import { logger } from '../telemetry/logger';
+import { EventName, TelemetryPayload } from '../telemetry/events';
 
 class AnalyticsService {
-  private isEnabled = true;
+  private currentRequestId: string | null = null;
 
   /**
-   * Track a standard user action or system event.
+   * Generates a new unique request ID for a pipeline run.
    */
-  trackEvent(eventName: AppEvent, payload?: EventPayload) {
-    if (!this.isEnabled) return;
+  startNewRequest(): string {
+    this.currentRequestId = `req-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    return this.currentRequestId;
+  }
 
-    // In a real app this would batch and send to PostHog, Mixpanel, etc.
-    // For MVP, we log to Metro to prove the QA hook works securely.
-    console.log(`[Analytics] 📊 EVENT: ${eventName}`, payload ? payload : '');
+  getRequestId(): string {
+    return this.currentRequestId || 'no-request-id';
   }
 
   /**
-   * Track an application boundary error.
+   * Track a telemetry event using the structured logger.
    */
-  trackError(errorName: string, errorMessage: string, contextualData?: EventPayload) {
-    if (!this.isEnabled) return;
+  trackEvent(eventName: EventName, payload: Omit<TelemetryPayload, 'requestId' | 'timestamp'>) {
+    const fullPayload: TelemetryPayload = {
+      ...payload,
+      requestId: this.getRequestId(),
+      timestamp: new Date().toISOString(),
+      role: 'parent', // Default, should be injected in real use if needed
+    } as any;
 
-    // Only log the structure of the error, never the user data that caused it
-    console.error(`[Analytics] 🛑 ERROR: ${errorName}`, {
-      message: errorMessage,
-      ...contextualData,
+    logger.log(eventName, fullPayload);
+  }
+
+  /**
+   * Helper bindings for pipeline events
+   */
+
+  trackPipelineStarted(data: {
+    inputType: CaptureInputType;
+    isOffline: boolean;
+    language: 'en' | 'es';
+    retryCount: number;
+    role: 'parent' | 'adult_child';
+  }) {
+    logger.log('pipeline_started', {
+      requestId: this.getRequestId(),
+      timestamp: new Date().toISOString(),
+      ...data,
     });
   }
 
-  // Helper bindings for common events
-
-  trackCaptureStarted(inputType: CaptureInputType, submitter: SubmitterType) {
-    this.trackEvent('capture_started', { inputType, submitter });
+  trackPipelineCompleted(data: {
+    durationMs: number;
+    transcriptionDurationMs?: number;
+    generationDurationMs: number;
+    outcome: ProcessingOutcome;
+    sectionCount: number;
+    actionItemCount: number;
+    flagCount: number;
+    role: 'parent' | 'adult_child';
+  }) {
+    logger.log('pipeline_completed', {
+      requestId: this.getRequestId(),
+      timestamp: new Date().toISOString(),
+      ...data,
+    });
   }
 
+  trackPipelineFailed(data: {
+    errorType: string;
+    errorCode?: string;
+    errorPhase: 'transcription' | 'generation' | 'unknown';
+    retryCount: number;
+    role: 'parent' | 'adult_child';
+  }) {
+    logger.log('pipeline_failed', {
+      requestId: this.getRequestId(),
+      timestamp: new Date().toISOString(),
+      ...data,
+    });
+  }
+
+  /**
+   * Legacy shim to prevent breaking existing code during migration.
+   * TODO: Migrate all callers to trackPipeline* methods.
+   */
   trackCaptureCompleted(durationSecs: number, inputType: CaptureInputType, wasOffline: boolean) {
-    this.trackEvent('capture_completed', { durationSecs, inputType, wasOffline });
+    this.trackEvent('pipeline_completed' as any, { 
+      durationMs: durationSecs * 1000, 
+      inputType, 
+      isOffline: wasOffline,
+      outcome: 'success',
+      generationDurationMs: durationSecs * 1000,
+      sectionCount: 0,
+      actionItemCount: 0,
+      flagCount: 0
+    } as any);
   }
 
   trackCaptureFailed(reason: string, inputType: CaptureInputType) {
-    this.trackEvent('capture_failed', { reason, inputType });
+    this.trackEvent('pipeline_failed' as any, { 
+      errorType: reason, 
+      inputType, 
+      errorPhase: 'unknown',
+      retryCount: 0 
+    } as any);
   }
 }
 

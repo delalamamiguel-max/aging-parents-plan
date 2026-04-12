@@ -45,6 +45,18 @@ export interface GenerateSummaryOutput {
   _validationWarnings?: string[];
 }
 
+/**
+ * Returns true if the output is a skeletal fallback (no content in most sections).
+ */
+export function isFallbackResult(output: GenerateSummaryOutput): boolean {
+  // If we have validation warnings like 'parse_error' or 'no_input', it's a fallback
+  if (output._validationWarnings && output._validationWarnings.length > 0) {
+    return true;
+  }
+  // If all core sections are empty, treat as fallback
+  return output.sections.every((s) => s.isEmpty);
+}
+
 // ─── Main entry: generate summary ────────────────────────────────────────────
 
 export async function generateSummaryFromInput(

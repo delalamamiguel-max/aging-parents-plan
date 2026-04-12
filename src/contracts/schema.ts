@@ -30,6 +30,14 @@ export type SubmitterType = 'parent' | 'adult_child';
 // ─── Approval states ──────────────────────────────────────────────────────────
 export type ApprovalStatus = 'not_required' | 'pending' | 'approved' | 'rejected';
 
+// ─── Processing Outcomes ──────────────────────────────────────────────────────
+export type ProcessingOutcome =
+  | 'processing'
+  | 'success'
+  | 'retryable_failure'
+  | 'non_retryable_failure'
+  | 'fallback_used';
+
 // ─── Section types (fixed order — design-guidelines.md §7) ───────────────────
 export type SectionType =
   | 'visit_date_provider'
@@ -106,6 +114,7 @@ export interface CaptureInput {
   language: string; // 'en' | 'es'
   isOffline: boolean;
   capturedAt: string;
+  lastOutcome?: ProcessingOutcome;
 }
 
 // ─── Visit summary (core entity) ──────────────────────────────────────────────
@@ -121,6 +130,7 @@ export interface VisitSummary {
   actionItems: ActionItem[];
   flags: AccuracyFlag[];
   captureInputId: string;
+  lastOutcome?: ProcessingOutcome;
   createdAt: string;
   updatedAt: string;
   reviewedAt?: string;

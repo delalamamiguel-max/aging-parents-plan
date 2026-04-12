@@ -24,6 +24,7 @@ export const Colors = {
   warning: '#D6A94B',  // used for uncertainty flags — NOT alarm red
   error: '#B4534B',    // reserve for destructive / truly blocking only
   info: '#5A7DA8',
+  fallback: '#8E44AD', // Purple for AI fallback / partial results
 
   // Derived
   primaryLight: '#EAF0ED',     // low-pressure backgrounds
@@ -31,6 +32,7 @@ export const Colors = {
   warningLight: '#FDF6E7',     // uncertainty badge background
   errorLight: '#FAEEED',       // error state background
   successLight: '#EAF5EF',     // success badge background
+  fallbackLight: '#F4ECF7',    // fallback badge background
   overlayDark: 'rgba(31,42,36,0.5)',
   overlayLight: 'rgba(247,245,241,0.9)',
 } as const;

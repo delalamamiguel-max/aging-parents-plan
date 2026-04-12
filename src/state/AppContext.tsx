@@ -92,9 +92,8 @@ type AppAction =
   | { type: 'REVOKE_SUMMARY'; summaryId: string; revokedAt: string }
   | { type: 'SET_SUMMARY_STATUS'; summaryId: string; status: SummaryStatus }
   | { type: 'SET_LANGUAGE'; language: 'en' | 'es' }
-  | { type: 'HYDRATE'; state: Partial<AppState> }
-  | { type: 'START_OFFLINE_PROCESSING'; captureId: string }
-  | { type: 'CANCEL_OFFLINE_PROCESSING' };
+  | { type: 'CANCEL_OFFLINE_PROCESSING' }
+  | { type: 'UPDATE_OFFLINE_CAPTURE'; captureId: string; updates: Partial<CaptureInput> };
 
 // ─── Reducer ──────────────────────────────────────────────────────────────────
 
@@ -166,6 +165,14 @@ function reducer(state: AppState, action: AppAction): AppState {
 
     case 'CANCEL_OFFLINE_PROCESSING':
       return { ...state, currentlyProcessingQueueId: null };
+
+    case 'UPDATE_OFFLINE_CAPTURE':
+      return {
+        ...state,
+        offlineCaptureQueue: state.offlineCaptureQueue.map((c) =>
+          c.id === action.captureId ? { ...c, ...action.updates } : c
+        ),
+      };
 
     case 'SET_LINK':
       return { ...state, link: action.link };
