@@ -1,58 +1,130 @@
-# Release Sign-off: [Version Number]
+# Final release signoff — Aging Parents Plan
 
-This document serves as the final authority for releasing the Aging Parents Plan application. **Version [X.X.X]** cannot be deployed to Production until all gates are marked PASS and both Leads have signed.
+**Purpose:** Single **go / no-go** record for a specific release, proving that **gates**, **runbooks**, and **CI** were satisfied before users get a new binary or production config.
 
-## 1. Milestone Traceability
+**Prerequisites (Steps 19–20):** Phase gate runbooks completed; CI and tests in place per `.github/workflows/ci.yml`.
 
-| Gate | Requirement | Checkpoint Doc | Status |
-|:---|:---|:---|:---|
-| **Phase 1** | Foundations & Role Clarity | [dev-working-agreement.md](file:///docs/runbooks/dev-working-agreement.md) | [ ] PASS |
-| **Phase 2** | Storage & Queue Hardening | [phase2-gate.md](file:///docs/runbooks/phase2-gate.md) | [ ] PASS |
-| **Phase 3** | Pipeline & Telemetry | [phase3-gate.md](file:///docs/runbooks/phase3-gate.md) | [ ] PASS |
-| **Phase 4** | CI & Automated Testing | [walkthrough.md](file:///brain/ced685ea-c68d-412b-ad81-fd21705b999f/walkthrough.md) | [ ] PASS |
+**Who signs:** **Two people** — typically **Product / owner** and **Engineering lead** (or delegated equivalents). **Both** must sign before release.
 
 ---
 
-## 2. Global Safety & Reliability Checks
+## Release record (fill in)
 
-### [ ] CI / Automation
-- [ ] GitHub Actions [Phase 4 CI Workflow] passed on `main`.
-- [ ] No critical lint errors or type failures in `final-release` branch.
-
-### [ ] Security & Privacy (PHI)
-- [ ] Metadata-only scrubbing confirmed for all `pipeline_*` events.
-- [ ] No local transcripts or diagnostic audio files leaked in release bundle.
-
-### [ ] Reliability & Rollback
-- [ ] Rollback strategy: Revert to previous build tagged `stable-XXXX`.
-- [ ] Database/Storage: No breaking migrations (all tests in `storageMigrations.test.ts` pass).
+| Field | Value |
+|-------|--------|
+| Release name / version (Expo `app.json` / store) | |
+| Git commit SHA (exact) | |
+| Target environment | ☐ staging ☐ production |
+| Release type | ☐ Internal build ☐ Store ☐ Backend-only |
+| Date prepared | |
 
 ---
 
-## 3. Final Smoke Test (Lead A + B)
+## Completed gates (mandatory attestation)
 
-| ID | Test Case | Target State | Result |
-|:---|:---|:---|:---|
-| ST-1 | Capture Voice | Success / Review | [ ] PASS |
-| ST-2 | Share Summary | Care Partner receives | [ ] PASS |
-| ST-3 | Force Offline | Queue banners visible | [ ] PASS |
-| ST-4 | App Restart | Data persists 100% | [ ] PASS |
+Check each only if the linked runbook was **executed** for this release (or formally waived with ticket reference).
 
----
-
-## Final Approval
-
-> [!IMPORTANT]
-> By signing below, you affirm that this release meets the PHI-safety standards and structural trust requirements outlined in the Master Plan.
-
-**Person A (Client Lead):** ____________________  Date: __________
-
-**Person B (Backend Lead):** ____________________ Date: __________
+| Gate | Doc | Completed | Waived (ticket #) |
+|------|-----|:---------:|:-----------------:|
+| Phase 2 — storage, queue, backend contract readiness | [phase2-gate.md](./phase2-gate.md) | ☐ | |
+| Phase 3 — integrated pipeline (API, timeout, retry, persistence) | [phase3-gate.md](./phase3-gate.md) | ☐ | |
+| Release checklist (env, smoke, evidence) | [release-checklist.md](./release-checklist.md) | ☐ | |
 
 ---
 
-## Release Log
+## 1 — Reliability (mandatory signoff block)
 
-*   **Commits Merged**: ____________________
-*   **Build ID**: ____________________
-*   **Notes**: ____________________
+**Statement:** We believe this release is **stable enough** for the target audience: capture → processing → summary flows behave as tested, and known limitations are documented in release notes.
+
+| # | Criterion | Pass | N/A |
+|---|------------|:----:|:---:|
+| 1.1 | Smoke test passed on a **real device** (text path; voice if in scope) per [release-checklist.md](./release-checklist.md). | ☐ | ☐ |
+| 1.2 | **Feature flags** documented: `EXPO_PUBLIC_USE_BACKEND_PIPELINE`, `EXPO_PUBLIC_BACKEND_API_BASE` match this environment. | ☐ | ☐ |
+| 1.3 | If backend is required: **`GET /health`** succeeds on production base URL. | ☐ | ☐ |
+| 1.4 | **Rollback path** understood: [rollback.md](./rollback.md) reviewed this cycle. | ☐ | ☐ |
+
+**Reliability — signed**
+
+| Role | Printed name | Signature / initials | Date |
+|------|----------------|------------------------|------|
+| Product / owner | | | |
+| Engineering | | | |
+
+---
+
+## 2 — Security & privacy (mandatory signoff block)
+
+**Statement:** Client configuration follows **ADR-002** — no production provider **secrets** ship in `EXPO_PUBLIC_*` bundles unless explicitly accepted; **`backend/.env`** holds server-only secrets; we avoid logging **PHI** in analytics or server telemetry.
+
+| # | Criterion | Pass | N/A |
+|---|------------|:----:|:---:|
+| 2.1 | [ADR-002: Env separation](../adr/ADR-002-env-separation.md) acknowledged for this release. | ☐ | ☐ |
+| 2.2 | Production **backend** secrets live only on the server (`backend/.env` or host secrets), not in the mobile repo. | ☐ | ☐ |
+| 2.3 | Support / incident handling avoids sharing **raw transcripts** externally (see [rollback.md](./rollback.md) and team policy). | ☐ | ☐ |
+
+**Security & privacy — signed**
+
+| Role | Printed name | Signature / initials | Date |
+|------|----------------|------------------------|------|
+| Product / owner | | | |
+| Engineering | | | |
+
+---
+
+## 3 — CI & quality (mandatory signoff block)
+
+**Statement:** The **exact commit** above passed automated checks defined in **`.github/workflows/ci.yml`**: install → app typecheck → backend install/build → **`npm test`** (Vitest unit + integration).
+
+| # | Criterion | Pass | Evidence link / run ID |
+|---|------------|:----:|-------------------------|
+| 3.1 | CI workflow **green** on the release commit | ☐ | |
+| 3.2 | No open **blocking** defects tied to this release (or listed as known issues in release notes) | ☐ | |
+
+**CI & quality — signed**
+
+| Role | Printed name | Signature / initials | Date |
+|------|----------------|------------------------|------|
+| Product / owner | | | |
+| Engineering | | | |
+
+---
+
+## 4 — Rollback readiness (mandatory signoff block)
+
+**Statement:** We know **how to roll back** or mitigate: flags, backend version, and who to call — per [rollback.md](./rollback.md).
+
+| # | Criterion | Pass |
+|---|------------|:----:|
+| 4.1 | **On-call** or owner for this release is identified (name + channel). | ☐ |
+| 4.2 | **Backend** previous good deploy / tag identified (if applicable). | ☐ |
+| 4.3 | **Store** rollback limitations understood (especially iOS). | ☐ |
+
+**Rollback readiness — signed**
+
+| Role | Printed name | Signature / initials | Date |
+|------|----------------|------------------------|------|
+| Product / owner | | | |
+| Engineering | | | |
+
+---
+
+## Final dual signoff (release authorized)
+
+By signing below, **both** parties confirm that Sections **1–4** are satisfied or **N/A** with documented waiver, and they authorize this release for the stated environment.
+
+| Party | Printed name | Signature | Date |
+|-------|----------------|-----------|------|
+| **Product / owner** | | | |
+| **Engineering** | | | |
+
+---
+
+## Evidence archive (optional)
+
+Attach or link: CI run, build IDs (EAS), release notes, support comms template.
+
+---
+
+## Revision
+
+Update when CI job names, gates, or signatory roles change.
