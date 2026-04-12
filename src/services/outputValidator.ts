@@ -3,9 +3,11 @@
  * Source: masterplan.md §7.2 "AI cannot invent"; §7.6 "flag uncertainty"
  *
  * Validates the raw LLM JSON response before it is written to state.
- * Blocks any summary that contains content not grounded in the input.
+ * - **Errors** block the response (sanitisedOutput null).
+ * - **Warnings** are logged and attached to the summary; output may still ship.
  *
- * This is a critical trust layer — do not bypass it.
+ * Deterministic checks only — no statistical NLP. Remaining risk is paraphrasing
+ * that evades substring checks (documented as heuristic gap).
  */
 
 import { SectionType, SECTION_ORDER } from '../contracts/schema';
@@ -35,21 +37,76 @@ export interface RawFlag {
 }
 
 export interface ValidationResult {
-  isValid: boolean;
-  violations: string[];
+  /** Blocking issues — sanitisedOutput will be null */
+  errors: string[];
+  /** Non-blocking issues — still logged on successful output */
+  warnings: string[];
   sanitisedOutput: RawLLMOutput | null;
 }
 
 const VALID_ACTION_TYPES = new Set(['medication', 'follow_up', 'referral_test', 'next_step']);
 const VALID_SECTION_TYPES = new Set<string>(SECTION_ORDER);
-const MAX_SECTION_LENGTH = 600; // characters — prevents bloated output
+const MAX_SECTION_LENGTH = 600;
 const MIN_CONFIDENCE = 0;
 const MAX_CONFIDENCE = 1;
+
+/**
+ * Verifies numeric / unit snippets are supported by the transcript (deterministic).
+ * Heuristic gap: paraphrased numbers without digits (e.g. "ten mg") are not checked.
+ */
+/** Normalise common unit words so "10 mg" can match "10 milligrams" in the transcript. */
+function normalizeUnitsForMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\bmilligrams?\b/g, 'mg')
+    .replace(/\bmicrograms?\b/g, 'mcg')
+    .replace(/\bmilliliters?\b/g, 'ml');
+}
+
+function verifyNumericGrounding(
+  text: string,
+  label: string,
+  rawInput: string,
+  visitDate: string,
+  errors: string[]
+): void {
+  const ctx = normalizeUnitsForMatch(`${rawInput} ${visitDate}`);
+
+  const reDosage = /\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|units?|milligrams?)\b/gi;
+  let m: RegExpExecArray | null;
+  const d = new RegExp(reDosage.source, 'gi');
+  const textNorm = normalizeUnitsForMatch(text);
+  while ((m = d.exec(textNorm)) !== null) {
+    const frag = m[0].trim().toLowerCase();
+    if (!ctx.includes(frag)) {
+      errors.push(`ungrounded_dosage_in_${label}:${truncateForLog(frag)}`);
+    }
+  }
+
+  const reBp = /\b(\d+)\s*\/\s*(\d+)\b/g;
+  let bp: RegExpExecArray | null;
+  const bpr = new RegExp(reBp.source, 'g');
+  while ((bp = bpr.exec(text)) !== null) {
+    const a = bp[1];
+    const b = bp[2];
+    if (!ctx.includes(a) || !ctx.includes(b)) {
+      errors.push(`ungrounded_bp_reading_in_${label}:${bp[0]}`);
+    }
+  }
+
+  const reLong = /\b\d{4,}\b/g;
+  let lm: RegExpExecArray | null;
+  const lr = new RegExp(reLong.source, 'g');
+  while ((lm = lr.exec(text)) !== null) {
+    if (!ctx.includes(lm[0])) {
+      errors.push(`ungrounded_long_number_in_${label}:${lm[0]}`);
+    }
+  }
+}
 
 // ─── Parse raw LLM text → RawLLMOutput ───────────────────────────────────────
 
 export function parseLLMResponse(raw: string): RawLLMOutput | null {
-  // Strip markdown fences if present (model sometimes ignores responseMimeType)
   const cleaned = raw
     .replace(/^```json\s*/i, '')
     .replace(/\s*```$/, '')
@@ -58,7 +115,6 @@ export function parseLLMResponse(raw: string): RawLLMOutput | null {
   try {
     return JSON.parse(cleaned) as RawLLMOutput;
   } catch {
-    // Try to extract first JSON object from the string
     const match = cleaned.match(/\{[\s\S]*\}/);
     if (match) {
       try {
@@ -78,14 +134,22 @@ export function validateLLMOutput(
   rawInput: string,
   visitDate: string
 ): ValidationResult {
-  const violations: string[] = [];
+  const errors: string[] = [];
+  const warnings: string[] = [];
 
-  // 1. Sections must be present and correctly typed
   if (!output.sections || typeof output.sections !== 'object') {
-    return { isValid: false, violations: ['sections field missing or not an object'], sanitisedOutput: null };
+    return {
+      errors: ['sections field missing or not an object'],
+      warnings: [],
+      sanitisedOutput: null,
+    };
   }
 
-  // 2. Validate and sanitise sections
+  const unknownSectionKeys = Object.keys(output.sections).filter((k) => !VALID_SECTION_TYPES.has(k));
+  if (unknownSectionKeys.length > 0) {
+    warnings.push(`unknown_section_keys_ignored:${unknownSectionKeys.join(',')}`);
+  }
+
   const sanitisedSections: Partial<Record<SectionType, string | null>> = {};
   for (const sectionType of SECTION_ORDER) {
     const content = output.sections[sectionType];
@@ -94,46 +158,47 @@ export function validateLLMOutput(
       continue;
     }
     if (typeof content !== 'string') {
-      violations.push(`Section ${sectionType} content is not a string`);
+      warnings.push(`section_${sectionType}_not_string_cleared`);
       sanitisedSections[sectionType] = null;
       continue;
     }
     if (content.length > MAX_SECTION_LENGTH) {
-      // Truncate rather than reject — keep the summary usable
       sanitisedSections[sectionType] = content.slice(0, MAX_SECTION_LENGTH);
-      violations.push(`Section ${sectionType} was truncated (too long)`);
+      warnings.push(`section_${sectionType}_truncated_to_${MAX_SECTION_LENGTH}_chars`);
     } else {
       sanitisedSections[sectionType] = content;
     }
   }
 
-  // 3. Validate action items
   const sanitisedItems: RawActionItem[] = [];
   const actionItems = Array.isArray(output.actionItems) ? output.actionItems : [];
+  if (!Array.isArray(output.actionItems)) {
+    warnings.push('actionItems_not_array_treated_as_empty');
+  }
 
   for (const item of actionItems) {
     if (!VALID_ACTION_TYPES.has(item.type)) {
-      violations.push(`Invalid action item type: ${item.type}`);
+      warnings.push(`skipped_action_invalid_type:${String(item.type)}`);
       continue;
     }
     if (typeof item.content !== 'string' || !item.content.trim()) {
-      violations.push('Action item with empty content skipped');
+      warnings.push('skipped_action_empty_content');
       continue;
     }
 
-    // Resolve and validate due dates
     let resolvedDueDate: string | null = null;
     if (item.dueDate) {
       if (isValidISODate(item.dueDate)) {
         resolvedDueDate = item.dueDate;
       } else {
-        violations.push(`Action item dueDate is not a valid ISO date: ${item.dueDate}`);
+        warnings.push(`action_dueDate_invalid_iso:${item.dueDate}`);
       }
     } else if (item.dueDateRaw) {
-      // Try to resolve a relative date expression
       const resolved = resolveRelativeDate(item.dueDateRaw, visitDate);
       if (resolved) {
         resolvedDueDate = resolved;
+      } else {
+        warnings.push(`action_dueDateRaw_unresolved:${item.dueDateRaw}`);
       }
     }
 
@@ -146,35 +211,82 @@ export function validateLLMOutput(
     });
   }
 
-  // 4. Validate flags
   const sanitisedFlags: RawFlag[] = [];
   const flags = Array.isArray(output.flags) ? output.flags : [];
+  if (!Array.isArray(output.flags)) {
+    warnings.push('flags_not_array_treated_as_empty');
+  }
 
   for (const flag of flags) {
     if (!VALID_SECTION_TYPES.has(flag.sectionType)) {
-      violations.push(`Flag references unknown section: ${flag.sectionType}`);
+      warnings.push(`skipped_flag_unknown_section:${flag.sectionType}`);
       continue;
     }
     const score = Number(flag.confidenceScore);
     if (isNaN(score) || score < MIN_CONFIDENCE || score > MAX_CONFIDENCE) {
-      violations.push(`Flag has invalid confidenceScore: ${flag.confidenceScore}`);
+      warnings.push(`skipped_flag_invalid_confidence:${flag.confidenceScore}`);
+      continue;
+    }
+    const rawPhrase = String(flag.rawPhrase ?? '').trim();
+    const interpretedPhrase = String(flag.interpretedPhrase ?? '').trim();
+    if (rawPhrase.length >= 3 && !phraseGroundedInInput(rawPhrase, rawInput)) {
+      warnings.push(`flag_dropped_ungrounded_rawphrase:${truncateForLog(rawPhrase)}`);
       continue;
     }
     sanitisedFlags.push({
       sectionType: flag.sectionType,
-      rawPhrase: String(flag.rawPhrase ?? '').trim(),
-      interpretedPhrase: String(flag.interpretedPhrase ?? '').trim(),
+      rawPhrase,
+      interpretedPhrase,
       confidenceScore: score,
     });
   }
 
-  return {
-    isValid: violations.length === 0,
-    violations,
-    sanitisedOutput: {
-      sections: sanitisedSections,
-      actionItems: sanitisedItems,
-      flags: sanitisedFlags,
-    },
+  const provisional: RawLLMOutput = {
+    sections: sanitisedSections,
+    actionItems: sanitisedItems,
+    flags: sanitisedFlags,
   };
+
+  errors.push(...collectGroundingErrors(provisional, rawInput, visitDate));
+
+  if (errors.length > 0) {
+    return { errors, warnings, sanitisedOutput: null };
+  }
+
+  return { errors: [], warnings, sanitisedOutput: provisional };
+}
+
+// ─── Grounding (deterministic) ────────────────────────────────────────────────
+
+function normalizeLoose(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function phraseGroundedInInput(phrase: string, rawInput: string): boolean {
+  const p = normalizeLoose(phrase);
+  const i = normalizeLoose(rawInput);
+  return p.length === 0 || i.includes(p);
+}
+
+function collectGroundingErrors(
+  output: RawLLMOutput,
+  rawInput: string,
+  visitDate: string
+): string[] {
+  const errors: string[] = [];
+
+  for (const st of SECTION_ORDER) {
+    const t = output.sections[st];
+    if (t) verifyNumericGrounding(t, `section_${st}`, rawInput, visitDate, errors);
+  }
+  for (let i = 0; i < output.actionItems.length; i++) {
+    verifyNumericGrounding(output.actionItems[i].content, `action_${i}`, rawInput, visitDate, errors);
+  }
+
+  return errors;
+}
+
+function truncateForLog(s: string, max = 80): string {
+  const t = s.replace(/\s+/g, ' ').trim();
+  return t.length <= max ? t : `${t.slice(0, max)}…`;
 }

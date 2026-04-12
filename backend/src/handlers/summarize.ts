@@ -29,7 +29,7 @@ export async function handleSummarizeMock(
   log: RequestLogger
 ): Promise<SummarizeResult> {
   const text = (body.rawText ?? body.rawAudioTranscript ?? '').trim();
-  log.info('summarize.mock invoked', { visitId: body.visitId, charCount: text.length });
+  log.info('summarize.mock invoked', { visitIdLen: body.visitId.length, inputCharCount: text.length });
 
   await withTimeout(
     Promise.resolve(),

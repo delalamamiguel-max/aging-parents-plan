@@ -20,12 +20,17 @@ import {
   AccuracyFlag,
   SectionType,
   SECTION_ORDER,
+  PipelineErrorCode,
+  type PipelineFallbackMetadata,
+  type PipelineOutcomeStatus,
 } from '../contracts/schema';
+import { summarizeViaBackend, isApiClientError } from '../api/client';
+import type { SummarizeApiResult } from '../api/endpoints';
 import { callLLM, LLMError } from './llmClient';
 import { SUMMARY_SYSTEM_PROMPT, buildUserPrompt, buildCorrectionPrompt } from './promptTemplates';
 import { parseLLMResponse, validateLLMOutput, RawActionItem, RawFlag } from './outputValidator';
 import { applyReadabilityToSections } from './readabilityGuard';
-import { isAIConfigured, getAIConfigSummary } from '../config/env';
+import { ENV, isLegacyClientLLMConfigured, getAIConfigSummary } from '../config/env';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -43,6 +48,10 @@ export interface GenerateSummaryOutput {
   generatedAt: string;
   /** Validation warnings logged internally — not shown to user */
   _validationWarnings?: string[];
+  /** Set when using backend or unified pipeline contract (ADR-001). */
+  pipelineOutcome?: Extract<PipelineOutcomeStatus, 'success' | 'fallback_used'>;
+  pipelineReasonCode?: (typeof PipelineErrorCode)[keyof typeof PipelineErrorCode];
+  pipelineFallback?: PipelineFallbackMetadata;
 }
 
 // ─── Main entry: generate summary ────────────────────────────────────────────
@@ -58,27 +67,96 @@ export async function generateSummaryFromInput(
 
   // Guard: empty input
   if (!rawContent.trim()) {
-    return buildFallback(visitId, 'no_input', generatedAt);
+    return annotatePipelineFallback(buildFallback(visitId, 'no_input', generatedAt), PipelineErrorCode.NoInput);
   }
 
-  // Guard: LLM not configured
-  if (!isAIConfigured()) {
-    console.warn('[summaryService] LLM not configured — falling back to stub. Config:', getAIConfigSummary());
-    return buildStubFallback(visitId, rawContent, generatedAt);
+  if (ENV.USE_BACKEND_PIPELINE && ENV.BACKEND_API_BASE.length > 0) {
+    try {
+      const { result } = await summarizeViaBackend({
+        visitId,
+        rawText: input.rawText,
+        rawAudioTranscript: input.rawAudioTranscript,
+        language,
+        visitDate: input.visitDate,
+      });
+      return mapBackendSummarizeResult(result);
+    } catch (err) {
+      if (isApiClientError(err)) {
+        console.warn(
+          `[summaryService] Backend summarize failed (${err.code}), using legacy client path. requestId=${err.requestId ?? 'n/a'}`
+        );
+      } else {
+        console.warn('[summaryService] Backend summarize threw, using legacy client path:', err);
+      }
+    }
   }
 
-  console.log('[summaryService] Generating. Config:', getAIConfigSummary());
+  return generateSummaryFromInputLegacy(visitId, input, rawContent, visitDate, language, generatedAt);
+}
+
+async function generateSummaryFromInputLegacy(
+  visitId: string,
+  input: GenerateSummaryInput,
+  rawContent: string,
+  visitDate: string,
+  language: 'en' | 'es',
+  generatedAt: string
+): Promise<GenerateSummaryOutput> {
+  // Guard: legacy client LLM not configured (backend path already attempted above)
+  if (!isLegacyClientLLMConfigured()) {
+    console.warn('[summaryService] Legacy LLM not configured — falling back to stub. Config:', getAIConfigSummary());
+    return annotatePipelineFallback(buildStubFallback(visitId, rawContent, generatedAt), PipelineErrorCode.StubLlmUnconfigured);
+  }
+
+  console.log('[summaryService] Generating (legacy client). Config:', getAIConfigSummary());
 
   try {
     const userPrompt = buildUserPrompt({ rawText: rawContent, visitDate, language });
     const rawResponse = await callLLM(SUMMARY_SYSTEM_PROMPT, userPrompt);
 
-    return processLLMResponse(rawResponse, rawContent, visitId, visitDate, generatedAt);
+    return annotatePipelineSuccess(processLLMResponse(rawResponse, rawContent, visitId, visitDate, generatedAt));
   } catch (err) {
     const code = err instanceof LLMError ? err.code : 'unknown';
     console.error(`[summaryService] LLM call failed (${code}):`, err);
-    return buildFallback(visitId, code, generatedAt);
+    return annotatePipelineFallback(buildFallback(visitId, code, generatedAt), reasonStringToPipelineCode(code));
   }
+}
+
+function mapBackendSummarizeResult(result: SummarizeApiResult): GenerateSummaryOutput {
+  const { summary } = result;
+  const base: GenerateSummaryOutput = {
+    sections: summary.sections as SummarySection[],
+    actionItems: summary.actionItems,
+    flags: summary.flags,
+    generatedAt: summary.generatedAt,
+    _validationWarnings: summary.validationWarnings ? [...summary.validationWarnings] : undefined,
+  };
+  if (result.outcome === 'success') {
+    return { ...base, pipelineOutcome: 'success' };
+  }
+  return {
+    ...base,
+    pipelineOutcome: 'fallback_used',
+    pipelineReasonCode: result.fallback.reasonCode,
+    pipelineFallback: result.fallback,
+  };
+}
+
+function annotatePipelineSuccess(out: GenerateSummaryOutput): GenerateSummaryOutput {
+  return { ...out, pipelineOutcome: 'success' };
+}
+
+function annotatePipelineFallback(
+  out: GenerateSummaryOutput,
+  reasonCode: (typeof PipelineErrorCode)[keyof typeof PipelineErrorCode]
+): GenerateSummaryOutput {
+  return { ...out, pipelineOutcome: 'fallback_used', pipelineReasonCode: reasonCode };
+}
+
+function reasonStringToPipelineCode(reason: string): (typeof PipelineErrorCode)[keyof typeof PipelineErrorCode] {
+  const known = new Set<string>(Object.values(PipelineErrorCode));
+  if (known.has(reason)) return reason as (typeof PipelineErrorCode)[keyof typeof PipelineErrorCode];
+  return PipelineErrorCode.Unknown;
 }
 
 // ─── One-time regeneration with parent correction ─────────────────────────────
@@ -92,7 +170,7 @@ export async function regenerateSummaryWithCorrection(
 ): Promise<GenerateSummaryOutput> {
   const generatedAt = new Date().toISOString();
 
-  if (!isAIConfigured()) {
+  if (!isLegacyClientLLMConfigured()) {
     return buildFallback(visitId, 'not_configured', generatedAt);
   }
 
@@ -131,8 +209,8 @@ function processLLMResponse(
   const validation = validateLLMOutput(parsed, rawInput, visitDate);
   const sanitised = validation.sanitisedOutput;
 
-  if (!sanitised) {
-    console.warn('[processLLMResponse] Validation fully failed:', validation.violations);
+  if (!sanitised || validation.errors.length > 0) {
+    console.warn('[processLLMResponse] Validation failed:', validation.errors, validation.warnings);
     return buildFallback(visitId, 'validation_failed', generatedAt);
   }
 
@@ -144,8 +222,8 @@ function processLLMResponse(
   if (readabilityReports.some(r => r.finalGradeEstimate > 8)) {
     console.warn('[readabilityGuard] Some sections still above grade 8 after processing', readabilityReports);
   }
-  if (validation.violations.length > 0) {
-    console.warn('[outputValidator] Validation warnings:', validation.violations);
+  if (validation.warnings.length > 0) {
+    console.warn('[outputValidator] Validation warnings:', validation.warnings);
   }
 
   // Build SummarySection[]
@@ -184,7 +262,12 @@ function processLLMResponse(
     actionItems,
     flags,
     generatedAt,
-    _validationWarnings: validation.violations,
+    _validationWarnings: [
+      ...validation.warnings,
+      ...readabilityReports
+        .filter((r) => r.finalGradeEstimate > 8)
+        .map((r) => `readability_${r.sectionType}_grade_est_${r.finalGradeEstimate}`),
+    ],
   };
 }
 
