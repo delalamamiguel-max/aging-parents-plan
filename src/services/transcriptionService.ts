@@ -1,236 +1,192 @@
 /**
- * Transcription Service — Aging Parents Plan
- * Source: implementation-plan.md §Whisper Transcription
+ * Transcription — Aging Parents Plan
  *
- * Provider-agnostic audio → text transcription layer.
- * Supports:
- *   'local'  — POST to local whisper_server.py (http://localhost:9000)
- *   'openai' — POST to OpenAI Whisper API  (api.openai.com)
- *
- * Uses the expo-file-system legacy API for multipart uploads.
- * Returns the raw transcript string.
- * Throws TranscriptionError with a code so callers can show appropriate UI.
+ * Voice capture uploads audio to the Node backend POST /transcribe, which
+ * proxies to the configured STT provider (default: Groq-hosted Whisper
+ * `whisper-large-v3-turbo`). The STT provider API key stays server-side.
+ * No Whisper daemon on device, no OpenAI client, no local Python server.
  */
 
-import {
-  getInfoAsync,
-  uploadAsync,
-  FileSystemUploadType,
-} from 'expo-file-system/legacy';
-import { transcribeViaBackend, isApiClientError } from '../api/client';
+import { getInfoAsync } from 'expo-file-system/legacy';
 import { ENV } from '../config/env';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface UploadResult {
-  status: number;
-  body: string;
-}
-
 // ─── Error type ───────────────────────────────────────────────────────────────
+
+export type TranscriptionErrorCode =
+  | 'no_speech'
+  | 'auth'
+  | 'network'
+  | 'timeout'
+  | 'unavailable'
+  | 'format_error'
+  | 'server_error'
+  | 'cancelled';
 
 export class TranscriptionError extends Error {
   constructor(
     message: string,
-    public readonly code:
-      | 'no_speech'
-      | 'auth'
-      | 'network'
-      | 'timeout'
-      | 'format_error'
-      | 'server_error'
+    public readonly code: TranscriptionErrorCode
   ) {
     super(message);
     this.name = 'TranscriptionError';
   }
 }
 
-/** User-facing messages keyed by error code. */
-export const TRANSCRIPTION_ERROR_MESSAGES: Record<TranscriptionError['code'], string> = {
-  no_speech:    "We couldn't hear anything clearly. Tap Record again and speak a little louder.",
-  auth:         'Transcription is not set up yet. Please check your API key in .env.',
-  network:      'Could not reach the transcription server. Make sure it is running.',
-  timeout:      'Transcription took too long. Try a shorter recording.',
+export const TRANSCRIPTION_ERROR_MESSAGES: Record<TranscriptionErrorCode, string> = {
+  no_speech:
+    "We couldn't hear anything clearly. Tap Record again and speak a little louder.",
+  auth: 'Transcription is not set up yet. Configure EXPO_PUBLIC_BACKEND_API_BASE and the backend STT key.',
+  network: 'Could not reach the app server. Check your connection and that the backend is running.',
+  timeout: 'Transcription is taking longer than expected. Your recording is safe — try again later.',
+  unavailable: 'The transcription service is busy right now. Please try again in a moment.',
   format_error: 'The audio file could not be read. Try recording again.',
-  server_error: 'Something went wrong on the transcription server. Try again.',
+  server_error: 'Something went wrong while transcribing. Try again.',
+  cancelled: 'Transcription was cancelled.',
 };
 
-const TIMEOUT_MS = 60_000;
+/** End-to-end client budget for POST /transcribe. Backend-side timeout is tighter. */
+const TRANSCRIBE_TIMEOUT_MS = 90_000;
 
-// ─── Main entry ───────────────────────────────────────────────────────────────
+interface ApiErrorBody {
+  ok: false;
+  requestId: string;
+  error: {
+    outcome: string;
+    code: string;
+    message: string;
+  };
+}
+
+interface ApiOkBody {
+  ok: true;
+  requestId: string;
+  result: { transcript: string; language: 'en' | 'es' };
+}
+
+function isApiErrorBody(v: unknown): v is ApiErrorBody {
+  if (!v || typeof v !== 'object') return false;
+  const o = v as { ok?: unknown; error?: unknown };
+  return o.ok === false && typeof o.error === 'object' && o.error !== null;
+}
+
+function isApiOkBody(v: unknown): v is ApiOkBody {
+  if (!v || typeof v !== 'object') return false;
+  const o = v as { ok?: unknown; result?: unknown };
+  if (o.ok !== true || !o.result || typeof o.result !== 'object') return false;
+  const r = o.result as { transcript?: unknown };
+  return typeof r.transcript === 'string';
+}
+
+function mapWireCode(code: string): TranscriptionErrorCode {
+  if (code === 'no_speech') return 'no_speech';
+  if (code === 'auth') return 'auth';
+  if (code === 'network') return 'network';
+  if (code === 'timeout') return 'timeout';
+  if (code === 'format_error' || code === 'validation_failed') return 'format_error';
+  if (code === 'server_error' || code === 'provider_error') return 'server_error';
+  return 'server_error';
+}
+
+function raceWithTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      reject(new TranscriptionError(`${label} (${ms}ms)`, 'timeout'));
+    }, ms);
+    promise.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+
+export interface TranscribeOptions {
+  signal?: AbortSignal;
+}
 
 /**
- * Transcribe an audio file at the given local URI.
- *
- * @param audioUri   Local file URI from expo-av (e.g. file:///path/to/recording.m4a)
- * @param language   'en' | 'es' — passed to Whisper to improve accuracy
- * @returns          Raw transcript string
+ * Upload local recording to backend /transcribe and return plain transcript text.
  */
 export async function transcribeAudio(
   audioUri: string,
-  language: 'en' | 'es' = 'en'
+  language: 'en' | 'es' = 'en',
+  options: TranscribeOptions = {}
 ): Promise<string> {
-  if (ENV.USE_BACKEND_PIPELINE && ENV.BACKEND_API_BASE.length > 0) {
-    try {
-      const { result } = await transcribeViaBackend({ language });
-      // Backend currently uses a JSON stub (no multipart audio yet). Prefer legacy for real files when needed.
-      return result.transcript;
-    } catch (e) {
-      if (isApiClientError(e)) {
-        console.warn(
-          `[transcriptionService] Backend transcribe failed (${e.code}), using legacy path. requestId=${e.requestId ?? 'n/a'}`
-        );
-      } else {
-        console.warn('[transcriptionService] Backend transcribe threw, using legacy path:', e);
-      }
-    }
-  }
-
-  if (ENV.WHISPER_PROVIDER === 'local') {
-    return transcribeLocal(audioUri, language);
-  }
-  if (ENV.WHISPER_PROVIDER === 'openai') {
-    return transcribeOpenAI(audioUri, language);
-  }
-  throw new TranscriptionError(
-    `Unknown WHISPER_PROVIDER: ${ENV.WHISPER_PROVIDER}`,
-    'server_error'
-  );
-}
-
-// ─── Local Whisper server ─────────────────────────────────────────────────────
-
-async function transcribeLocal(
-  audioUri: string,
-  language: 'en' | 'es'
-): Promise<string> {
-  const endpoint = `${ENV.WHISPER_LOCAL_URL}/transcribe`;
-
-  // Verify file exists
-  const info = await getInfoAsync(audioUri);
-  if (!info.exists) {
-    throw new TranscriptionError(`Audio file not found: ${audioUri}`, 'format_error');
-  }
-
-  let response: UploadResult;
-  try {
-    response = await withTimeout(
-      uploadAsync(endpoint, audioUri, {
-        httpMethod: 'POST',
-        uploadType: FileSystemUploadType.MULTIPART,
-        fieldName: 'file',
-        mimeType: 'audio/m4a',
-        parameters: { language },
-      }),
-      TIMEOUT_MS,
-      'Local Whisper server timed out after 60 seconds'
-    );
-  } catch (err) {
-    if (err instanceof TranscriptionError) throw err;
+  if (!ENV.BACKEND_API_BASE?.trim()) {
     throw new TranscriptionError(
-      `Cannot reach Whisper server at ${ENV.WHISPER_LOCAL_URL}. Is whisper_server.py running?`,
-      'network'
-    );
-  }
-
-  return parseWhisperResponse(response.body, response.status);
-}
-
-// ─── OpenAI Whisper API ───────────────────────────────────────────────────────
-
-async function transcribeOpenAI(
-  audioUri: string,
-  language: 'en' | 'es'
-): Promise<string> {
-  if (!ENV.OPENAI_API_KEY) {
-    throw new TranscriptionError(
-      'EXPO_PUBLIC_OPENAI_API_KEY is not set. Add it to your .env file.',
+      'EXPO_PUBLIC_BACKEND_API_BASE is not set. Add your backend URL to .env.',
       'auth'
     );
   }
 
-  const endpoint = 'https://api.openai.com/v1/audio/transcriptions';
+  const base = ENV.BACKEND_API_BASE.replace(/\/$/, '');
+  const url = `${base}/transcribe`;
 
   const info = await getInfoAsync(audioUri);
   if (!info.exists) {
     throw new TranscriptionError(`Audio file not found: ${audioUri}`, 'format_error');
   }
 
-  let response: UploadResult;
-  try {
-    response = await withTimeout(
-      uploadAsync(endpoint, audioUri, {
-        httpMethod: 'POST',
-        uploadType: FileSystemUploadType.MULTIPART,
-        fieldName: 'file',
-        mimeType: 'audio/m4a',
-        parameters: {
-          model: 'whisper-1',
-          language,
-          response_format: 'json',
-        },
-        headers: {
-          Authorization: `Bearer ${ENV.OPENAI_API_KEY}`,
-        },
-      }),
-      TIMEOUT_MS,
-      'OpenAI Whisper API timed out after 60 seconds'
-    );
-  } catch (err) {
-    if (err instanceof TranscriptionError) throw err;
-    throw new TranscriptionError('Network error calling OpenAI Whisper API', 'network');
-  }
+  const formData = new FormData();
+  formData.append('language', language);
+  formData.append('file', {
+    uri: audioUri,
+    name: 'recording.m4a',
+    type: 'audio/m4a',
+  } as unknown as Blob);
 
-  if (response.status === 401) {
-    throw new TranscriptionError('Invalid OpenAI API key', 'auth');
-  }
+  console.log(`[transcription] backend.start url=${url} lang=${language}`);
 
-  return parseWhisperResponse(response.body, response.status);
-}
+  const fetchOnce = async (): Promise<string> => {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        body: formData,
+        signal: options.signal,
+      });
+    } catch (e) {
+      const name = e instanceof Error ? e.name : '';
+      const msg = e instanceof Error ? e.message : String(e);
+      if (name === 'AbortError' || msg.toLowerCase().includes('abort')) {
+        throw new TranscriptionError('Transcription was cancelled.', 'cancelled');
+      }
+      console.warn('[transcription] fetch.failed', e);
+      throw new TranscriptionError(`Could not reach backend: ${msg}`, 'network');
+    }
 
-// ─── Shared response parser ───────────────────────────────────────────────────
+    const text = await res.text();
+    let parsed: unknown;
+    try {
+      parsed = text.length > 0 ? JSON.parse(text) : null;
+    } catch {
+      throw new TranscriptionError('Invalid JSON from transcription server.', 'server_error');
+    }
 
-function parseWhisperResponse(body: string, status: number): string {
-  let parsed: { transcript?: string; text?: string; error?: string; code?: string };
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    throw new TranscriptionError('Could not parse server response', 'server_error');
-  }
+    if (isApiErrorBody(parsed)) {
+      const code = mapWireCode(parsed.error.code);
+      throw new TranscriptionError(parsed.error.message || 'Transcription failed', code);
+    }
 
-  if (status === 422 || parsed.code === 'no_speech') {
-    throw new TranscriptionError(parsed.error ?? 'No speech detected', 'no_speech');
-  }
-  if (status === 400) {
-    throw new TranscriptionError(parsed.error ?? 'Bad audio file', 'format_error');
-  }
-  if (status >= 500) {
-    throw new TranscriptionError(parsed.error ?? 'Server error', 'server_error');
-  }
-  if (status !== 200) {
-    throw new TranscriptionError(`Unexpected status ${status}`, 'server_error');
-  }
+    if (!res.ok || !isApiOkBody(parsed)) {
+      throw new TranscriptionError(
+        typeof text === 'string' && text ? text.slice(0, 200) : `HTTP ${res.status}`,
+        res.status === 422 ? 'no_speech' : 'server_error'
+      );
+    }
 
-  // Local server returns { transcript: "..." }
-  // OpenAI returns        { text: "..." }
-  const text = parsed.transcript ?? parsed.text ?? '';
-  if (!text.trim()) {
-    throw new TranscriptionError('Empty transcript returned', 'no_speech');
-  }
+    const out = parsed.result.transcript.trim();
+    if (!out) {
+      throw new TranscriptionError('Empty transcript returned.', 'no_speech');
+    }
+    console.log(`[transcription] backend.done chars=${out.length}`);
+    return out;
+  };
 
-  return text.trim();
-}
-
-// ─── Utility ──────────────────────────────────────────────────────────────────
-
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(
-        () => reject(new TranscriptionError(message, 'timeout')),
-        ms
-      )
-    ),
-  ]);
+  return raceWithTimeout(fetchOnce(), TRANSCRIBE_TIMEOUT_MS, 'Transcription timed out');
 }

@@ -9,7 +9,11 @@
  * 3. EXCLUDE identifiable PII unless specifically necessary for correlation.
  */
 
-import { CaptureInputType, SubmitterType, ProcessingOutcome } from '../contracts/schema';
+import type {
+  CaptureInputType,
+  SubmitterType,
+  PipelineOutcomeStatus,
+} from '../contracts/schema';
 
 export type EventName =
   | 'pipeline_started'
@@ -22,7 +26,7 @@ export type EventName =
 export interface BasePayload {
   requestId: string;
   timestamp: string;
-  role: 'parent' | 'adult_child';
+  role: SubmitterType;
 }
 
 export interface PipelineStartedPayload extends BasePayload {
@@ -36,7 +40,9 @@ export interface PipelineCompletedPayload extends BasePayload {
   durationMs: number;
   transcriptionDurationMs?: number;
   generationDurationMs: number;
-  outcome: ProcessingOutcome;
+  // Narrowed to the "completed" subset of outcomes.
+  // Failure outcomes use `PipelineFailedPayload` instead.
+  outcome: Extract<PipelineOutcomeStatus, 'success' | 'fallback_used'>;
   sectionCount: number;
   actionItemCount: number;
   flagCount: number;

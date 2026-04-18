@@ -257,7 +257,7 @@ export type TranscribeViaBackendResponse = {
 };
 
 /**
- * POST `/transcribe` (JSON stub until multipart is implemented on the server).
+ * POST `/transcribe` (JSON body for tests; app voice uses multipart from `transcriptionService`).
  * @example
  * ```ts
  * const { result } = await transcribeViaBackend({ language: 'en' });

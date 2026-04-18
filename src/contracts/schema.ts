@@ -172,13 +172,15 @@ export type PipelineOutcomeStatus =
 /**
  * Machine-readable codes for transcription errors, LLM errors passed into
  * summary fallbacks, summary `buildFallback` reasons, and screen-level failures.
- * String values match `transcriptionService`, `llmClient`, and `summaryService` today.
+ * String values match `transcriptionService`, backend summarize handler, and `summaryService` today.
  */
 export const PipelineErrorCode = {
   NoSpeech: 'no_speech',
   Auth: 'auth',
   Network: 'network',
   Timeout: 'timeout',
+  /** Upstream provider refused or rate-limited (e.g. STT 429). Retryable. */
+  Unavailable: 'unavailable',
   FormatError: 'format_error',
   ServerError: 'server_error',
   Parse: 'parse',
@@ -187,6 +189,9 @@ export const PipelineErrorCode = {
   ParseError: 'parse_error',
   ValidationFailed: 'validation_failed',
   NotConfigured: 'not_configured',
+  NotImplemented: 'not_implemented',
+  /** Input transcript was too short or was a known mock/boilerplate string. */
+  InsufficientDetail: 'insufficient_detail',
   RegenerationFailed: 'regeneration_failed',
   Unknown: 'unknown',
   /** ProcessingScreen catch-all / analytics when a non-transcription throw escapes. */

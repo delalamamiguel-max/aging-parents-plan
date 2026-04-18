@@ -183,12 +183,13 @@ export default function ProcessingScreen({ navigation, route }: Props) {
 
         // Check for fallback/stub
         const isFallback = result.sections.every(s => s.isEmpty);
+        if (isFallback) {
           if (captureInput.isOffline) {
             dispatch({ type: 'CANCEL_OFFLINE_PROCESSING' });
-            dispatch({ 
-              type: 'UPDATE_OFFLINE_CAPTURE', 
-              captureId: captureInput.id, 
-              updates: { lastOutcome: 'fallback_used' } 
+            dispatch({
+              type: 'UPDATE_OFFLINE_CAPTURE',
+              captureId: captureInput.id,
+              updates: { lastOutcome: 'fallback_used' }
             });
           }
 
@@ -204,7 +205,6 @@ export default function ProcessingScreen({ navigation, route }: Props) {
                 navigation.replace('SummaryReview', { summaryId: visitId });
               }
             },
-            }
           });
 
           analytics.trackPipelineCompleted({
@@ -219,6 +219,7 @@ export default function ProcessingScreen({ navigation, route }: Props) {
           });
 
           return;
+        }
 
         const durationMs = Date.now() - startTime;
         analytics.trackPipelineCompleted({

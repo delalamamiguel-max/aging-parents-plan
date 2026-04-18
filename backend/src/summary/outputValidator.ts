@@ -1,19 +1,10 @@
 /**
- * Output Validator — Aging Parents Plan
- * Source: masterplan.md §7.2 "AI cannot invent"; §7.6 "flag uncertainty"
- *
- * Validates the raw LLM JSON response before it is written to state.
- * - **Errors** block the response (sanitisedOutput null).
- * - **Warnings** are logged and attached to the summary; output may still ship.
- *
- * Deterministic checks only — no statistical NLP. Remaining risk is paraphrasing
- * that evades substring checks (documented as heuristic gap).
+ * Output Validator — backend copy of app `src/services/outputValidator.ts`.
  */
 
-import { SectionType, SECTION_ORDER } from '../contracts/schema';
-import { isValidISODate, resolveRelativeDate } from './dateParser';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import type { SectionType } from '../types.js';
+import { SECTION_ORDER } from '../types.js';
+import { isValidISODate, resolveRelativeDate } from './dateParser.js';
 
 export interface RawLLMOutput {
   sections: Partial<Record<SectionType, string | null>>;
@@ -37,9 +28,7 @@ export interface RawFlag {
 }
 
 export interface ValidationResult {
-  /** Blocking issues — sanitisedOutput will be null */
   errors: string[];
-  /** Non-blocking issues — still logged on successful output */
   warnings: string[];
   sanitisedOutput: RawLLMOutput | null;
 }
@@ -50,11 +39,6 @@ const MAX_SECTION_LENGTH = 600;
 const MIN_CONFIDENCE = 0;
 const MAX_CONFIDENCE = 1;
 
-/**
- * Verifies numeric / unit snippets are supported by the transcript (deterministic).
- * Heuristic gap: paraphrased numbers without digits (e.g. "ten mg") are not checked.
- */
-/** Normalise common unit words so "10 mg" can match "10 milligrams" in the transcript. */
 function normalizeUnitsForMatch(s: string): string {
   return s
     .toLowerCase()
@@ -104,8 +88,6 @@ function verifyNumericGrounding(
   }
 }
 
-// ─── Parse raw LLM text → RawLLMOutput ───────────────────────────────────────
-
 export function parseLLMResponse(raw: string): RawLLMOutput | null {
   const cleaned = raw
     .replace(/^```json\s*/i, '')
@@ -126,8 +108,6 @@ export function parseLLMResponse(raw: string): RawLLMOutput | null {
     return null;
   }
 }
-
-// ─── Validate ─────────────────────────────────────────────────────────────────
 
 export function validateLLMOutput(
   output: RawLLMOutput,
@@ -256,8 +236,6 @@ export function validateLLMOutput(
   return { errors: [], warnings, sanitisedOutput: provisional };
 }
 
-// ─── Grounding (deterministic) ────────────────────────────────────────────────
-
 function normalizeLoose(s: string): string {
   return s.toLowerCase().replace(/\s+/g, ' ').trim();
 }
@@ -268,11 +246,7 @@ function phraseGroundedInInput(phrase: string, rawInput: string): boolean {
   return p.length === 0 || i.includes(p);
 }
 
-function collectGroundingErrors(
-  output: RawLLMOutput,
-  rawInput: string,
-  visitDate: string
-): string[] {
+function collectGroundingErrors(output: RawLLMOutput, rawInput: string, visitDate: string): string[] {
   const errors: string[] = [];
 
   for (const st of SECTION_ORDER) {

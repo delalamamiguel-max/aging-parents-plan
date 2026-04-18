@@ -4,8 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { isStructuredApiError, StructuredApiError } from './errors.js';
 import { createRequestLogger } from './logger.js';
 import { validateSummarizeBody, validateTranscribeBody } from './validation.js';
-import { handleSummarizeMock } from './handlers/summarize.js';
-import { handleTranscribeMock } from './handlers/transcribe.js';
+import { handleSummarize } from './handlers/summarize.js';
+import { handleTranscribe } from './handlers/transcribe.js';
+import { parseTranscribeMultipart, ParseTranscribeError } from './http/parseTranscribeMultipart.js';
 import type {
   ApiEnvelope,
   ApiErrorEnvelope,
@@ -13,7 +14,7 @@ import type {
   SummarizeResult,
   SummarizeSuccessPayload,
 } from './types.js';
-import { getServerConfigSummary, serverEnv } from './config/env.js';
+import { getServerConfigSummary, serverEnv, validateServerEnv } from './config/env.js';
 import { BackendTelemetryEvent } from './telemetry/events.js';
 import { emitTelemetry } from './telemetry/logger.js';
 
@@ -130,7 +131,7 @@ async function routeSummarize(
   }
   try {
     const body = validateSummarizeBody(raw);
-    const result: SummarizeResult = await handleSummarizeMock(body, log);
+    const result: SummarizeResult = await handleSummarize(body, log);
     const envelope: ApiEnvelope<SummarizeResult> = { ok: true, requestId, result };
     sendJson(res, 200, envelope);
     if (isSummarizeOk(result)) {
@@ -220,37 +221,114 @@ async function routeTranscribe(
     finish({ httpStatus: 405, ok: false, errorCode: 'validation_failed', errorOutcome: 'non_retryable_failure' });
     return;
   }
-  let raw: unknown;
+  const contentType = (req.headers['content-type'] ?? '').toLowerCase();
+
   try {
-    const text = await readBody(req);
-    raw = text ? JSON.parse(text) : {};
-  } catch {
-    sendJson(
-      res,
-      400,
-      toErrorEnvelope(
-        requestId,
-        new StructuredApiError('Invalid JSON', {
-          outcome: 'non_retryable_failure',
-          code: 'validation_failed',
-          httpStatus: 400,
-        })
-      )
-    );
-    finish({ httpStatus: 400, ok: false, errorCode: 'validation_failed', errorOutcome: 'non_retryable_failure', phase: 'parse_body' });
-    return;
-  }
-  try {
+    if (contentType.includes('multipart/form-data')) {
+      const { audio, mimeType, language } = await parseTranscribeMultipart(req);
+      const result = await handleTranscribe(audio, mimeType, language, log);
+      sendJson(res, 200, { ok: true, requestId, result } as const);
+      finish({
+        httpStatus: 200,
+        ok: true,
+        language: result.language,
+        transcriptCharCount: result.transcript.length,
+      });
+      return;
+    }
+
+    if (!contentType.includes('application/json')) {
+      sendJson(
+        res,
+        400,
+        toErrorEnvelope(
+          requestId,
+          new StructuredApiError(
+            'Content-Type must be multipart/form-data (field "file") or application/json for test hooks.',
+            {
+              outcome: 'non_retryable_failure',
+              code: 'validation_failed',
+              httpStatus: 400,
+            }
+          )
+        )
+      );
+      finish({
+        httpStatus: 400,
+        ok: false,
+        errorCode: 'validation_failed',
+        errorOutcome: 'non_retryable_failure',
+        phase: 'content_type',
+      });
+      return;
+    }
+
+    let raw: unknown;
+    try {
+      const text = await readBody(req);
+      raw = text ? JSON.parse(text) : {};
+    } catch {
+      sendJson(
+        res,
+        400,
+        toErrorEnvelope(
+          requestId,
+          new StructuredApiError('Invalid JSON', {
+            outcome: 'non_retryable_failure',
+            code: 'validation_failed',
+            httpStatus: 400,
+          })
+        )
+      );
+      finish({
+        httpStatus: 400,
+        ok: false,
+        errorCode: 'validation_failed',
+        errorOutcome: 'non_retryable_failure',
+        phase: 'parse_body',
+      });
+      return;
+    }
+
     const body = validateTranscribeBody(raw);
-    const result = await handleTranscribeMock(body, log);
-    sendJson(res, 200, { ok: true, requestId, result } as const);
-    finish({
-      httpStatus: 200,
-      ok: true,
-      language: result.language,
-      transcriptCharCount: result.transcript.length,
-    });
+    if (body._stubInvalid) {
+      throw new StructuredApiError('Stub invalid request', {
+        outcome: 'non_retryable_failure',
+        code: 'format_error',
+        httpStatus: 400,
+      });
+    }
+    throw new StructuredApiError(
+      'Voice transcription requires multipart/form-data: field name "file" (audio), optional "language" (en|es).',
+      {
+        outcome: 'non_retryable_failure',
+        code: 'format_error',
+        httpStatus: 400,
+      }
+    );
   } catch (e) {
+    if (e instanceof ParseTranscribeError) {
+      sendJson(
+        res,
+        400,
+        toErrorEnvelope(
+          requestId,
+          new StructuredApiError(e.message, {
+            outcome: 'non_retryable_failure',
+            code: 'format_error',
+            httpStatus: 400,
+          })
+        )
+      );
+      finish({
+        httpStatus: 400,
+        ok: false,
+        errorCode: 'format_error',
+        errorOutcome: 'non_retryable_failure',
+        phase: 'multipart',
+      });
+      return;
+    }
     if (isStructuredApiError(e)) {
       sendJson(res, e.httpStatus, toErrorEnvelope(requestId, e));
       finish({
@@ -350,6 +428,14 @@ const server = createServer((req, res) => {
     }
   })();
 });
+
+const envErrors = validateServerEnv();
+if (envErrors.length > 0) {
+  console.error('[backend] FATAL: invalid environment configuration:');
+  for (const msg of envErrors) console.error(`  - ${msg}`);
+  console.error('[backend] Edit backend/.env and restart. See backend/.env.example.');
+  process.exit(1);
+}
 
 server.listen(PORT, () => {
   console.log(

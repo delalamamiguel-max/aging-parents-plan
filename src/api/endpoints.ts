@@ -36,7 +36,7 @@ export interface SummarizeApiRequest {
   visitDate?: string;
 }
 
-/** Stub JSON body; future: multipart audio to `/transcribe`. */
+/** JSON-only test hooks; voice uses multipart POST `/transcribe`. */
 export interface TranscribeApiRequest {
   language?: 'en' | 'es';
   /** Backend test hook only — omit in production callers */

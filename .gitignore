@@ -33,6 +33,9 @@ yarn-error.*
 # local env files
 .env*.local
 
+# Backend API keys (Ollama Cloud, OpenAI, etc.) — never commit
+backend/.env
+
 # typescript
 *.tsbuildinfo
 

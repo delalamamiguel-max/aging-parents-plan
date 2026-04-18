@@ -17,6 +17,7 @@ export type ApiPipelineErrorCode =
   | 'auth'
   | 'network'
   | 'timeout'
+  | 'unavailable'
   | 'format_error'
   | 'server_error'
   | 'parse'
@@ -25,6 +26,8 @@ export type ApiPipelineErrorCode =
   | 'parse_error'
   | 'validation_failed'
   | 'not_configured'
+  | 'not_implemented'
+  | 'insufficient_detail'
   | 'regeneration_failed'
   | 'unknown'
   | 'llm_generation_error'
@@ -46,6 +49,16 @@ export type SectionType =
   | 'referrals_tests'
   | 'follow_up_appointment';
 
+/** Fixed section order — mirrors app `contracts/schema.ts`. */
+export const SECTION_ORDER: SectionType[] = [
+  'visit_date_provider',
+  'what_happened',
+  'medication_changes',
+  'next_steps',
+  'referrals_tests',
+  'follow_up_appointment',
+];
+
 export interface SummarySectionDTO {
   sectionType: SectionType;
   content: string;
@@ -61,6 +74,8 @@ export interface ActionItemDTO {
   status: 'open' | 'completed' | 'not_scheduled';
   isFlagged: boolean;
   dueDate?: string;
+  /** Stage 1 segment ids this item was derived from (traceability). */
+  sourceSegmentIds?: readonly string[];
 }
 
 export interface AccuracyFlagDTO {
@@ -69,6 +84,8 @@ export interface AccuracyFlagDTO {
   rawPhrase: string;
   interpretedPhrase: string;
   confidenceScore: number;
+  /** Stage 1 segment ids this flag was derived from (traceability). */
+  sourceSegmentIds?: readonly string[];
 }
 
 /** Mirrors app `GenerateSummaryOutput` fields the API returns */
@@ -104,17 +121,47 @@ export type SummarizeResult =
 
 // ─── Requests ─────────────────────────────────────────────────────────────────
 
+/** Transcript segment with audio timing, for the two-stage pipeline. */
+export interface AudioSegmentPayload {
+  segmentIndex: number;
+  startSec?: number;
+  endSec?: number;
+  text: string;
+}
+
+/** PDF page payload — text layer and/or page image (base64, no data URL prefix). */
+export interface PdfPagePayload {
+  pageNumber: number;
+  text?: string;
+  imageBase64?: string;
+  assetId?: string;
+}
+
+/** Standalone image payload — base64 bytes (no data URL prefix). */
+export interface ImagePayload {
+  imageIndex: number;
+  imageBase64: string;
+  assetId?: string;
+}
+
 export interface SummarizeRequestBody {
   visitId: string;
+  /** Loose text (e.g. user notes). */
   rawText?: string;
-  /** Future: transcript from /transcribe */
+  /** Whole-audio transcript fallback when per-segment timing is unavailable. */
   rawAudioTranscript?: string;
+  /** Per-segment audio transcripts with timestamps (preferred). */
+  audioSegments?: readonly AudioSegmentPayload[];
+  /** PDF pages — text layer or base64 image, consumed by Stage 1. */
+  pdfPages?: readonly PdfPagePayload[];
+  /** Standalone images (e.g. photos of discharge papers), consumed by Stage 1. */
+  images?: readonly ImagePayload[];
   language?: 'en' | 'es';
   visitDate?: string;
 }
 
 export interface TranscribeRequestBody {
-  /** Stub: optional pretend payload; real impl uses multipart audio */
+  /** JSON-only test hooks; production uploads use multipart field `file`. */
   language?: 'en' | 'es';
   /** If true, validation stub returns invalid_request (testing) */
   _stubInvalid?: boolean;
