@@ -6,7 +6,11 @@
  * Only boolean flags, enums, counts, and duration metrics.
  */
 
-import { CaptureInputType, SubmitterType, ProcessingOutcome } from '../contracts/schema';
+import {
+  CaptureInputType,
+  SubmitterType,
+  ProcessingOutcome,
+} from '../contracts/schema';
 import { logger } from '../telemetry/logger';
 import { EventName, TelemetryPayload } from '../telemetry/events';
 
@@ -27,16 +31,23 @@ class AnalyticsService {
 
   /**
    * Track a telemetry event using the structured logger.
+   *
+   * The payload is intentionally loose to allow event-specific metadata.
+   * Callers are responsible for enforcing PHI rules (see file header):
+   * no rawText, no transcripts, no medical details — only booleans, enums,
+   * counts, and timing metrics.
    */
-  trackEvent(eventName: EventName, payload: Omit<TelemetryPayload, 'requestId' | 'timestamp'>) {
-    const fullPayload: TelemetryPayload = {
+  trackEvent(
+    eventName: EventName,
+    payload: Record<string, unknown> = {}
+  ) {
+    const fullPayload = {
       ...payload,
       requestId: this.getRequestId(),
       timestamp: new Date().toISOString(),
-      role: 'parent', // Default, should be injected in real use if needed
-    } as any;
+    };
 
-    logger.log(eventName, fullPayload);
+    logger.log(eventName, fullPayload as unknown as TelemetryPayload);
   }
 
   /**
@@ -85,6 +96,19 @@ class AnalyticsService {
       requestId: this.getRequestId(),
       timestamp: new Date().toISOString(),
       ...data,
+    });
+  }
+
+  /**
+   * Emitted when the user initiates a capture (voice/text/photo).
+   * Keep PHI-free: only the input type and the submitter role.
+   */
+  trackCaptureStarted(inputType: CaptureInputType, role: SubmitterType) {
+    logger.log('capture_started', {
+      requestId: this.getRequestId(),
+      timestamp: new Date().toISOString(),
+      inputType,
+      role,
     });
   }
 

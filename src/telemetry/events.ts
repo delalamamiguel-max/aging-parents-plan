@@ -21,6 +21,10 @@ export type EventName =
   | 'pipeline_failed'
   | 'summary_review_opened'
   | 'summary_action_taken' // approved, rejected, shared
+  | 'summary_saved_private'
+  | 'summary_approved'
+  | 'summary_rejected'
+  | 'capture_started'
   | 'app_foregrounded';
 
 export interface BasePayload {

@@ -92,8 +92,10 @@ type AppAction =
   | { type: 'REVOKE_SUMMARY'; summaryId: string; revokedAt: string }
   | { type: 'SET_SUMMARY_STATUS'; summaryId: string; status: SummaryStatus }
   | { type: 'SET_LANGUAGE'; language: 'en' | 'es' }
+  | { type: 'START_OFFLINE_PROCESSING'; captureId: string }
   | { type: 'CANCEL_OFFLINE_PROCESSING' }
-  | { type: 'UPDATE_OFFLINE_CAPTURE'; captureId: string; updates: Partial<CaptureInput> };
+  | { type: 'UPDATE_OFFLINE_CAPTURE'; captureId: string; updates: Partial<CaptureInput> }
+  | { type: 'HYDRATE'; state: Partial<AppState> };
 
 // ─── Reducer ──────────────────────────────────────────────────────────────────
 
